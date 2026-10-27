@@ -130,6 +130,8 @@ addToolLibrary(displayGuard displayGuard "${nativeDirectory}/displayGuard")
 
 addToolLibrary(borderlessFit borderlessFit "${nativeDirectory}/borderlessFit")
 
+addToolLibrary(d3d9Borderless d3d9Borderless "${nativeDirectory}/d3d9Borderless")
+
 # A game's own tools live in games/<game>/native/<tool>, built the same way.
 file(GLOB gameToolFolders LIST_DIRECTORIES true "${gameDirectory}/native/*")
 foreach(gameToolFolder IN LISTS gameToolFolders)

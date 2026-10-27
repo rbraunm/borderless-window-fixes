@@ -3,4 +3,6 @@
 # shipped state; a line naming a tool the release does not ship is removed and noted in the loader's log.
 steamLocator.dll
 configBypass.dll
-#borderlessFit.dll
+renderSettings.dll
+d3d9Borderless.dll
+borderlessFit.dll

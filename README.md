@@ -52,7 +52,7 @@ Run it as `powershell -NoProfile -File build.ps1 ...` when calling from another 
 `.\package.ps1 -game soma -outputPath <zip>` packs a built game's release: the same layout, without the diagnostic tools.
 
 ### Releases
-A game is released only when its release files change. `release.ps1` builds every game under `games` with `-buildCommit unversioned`, so the DLLs depend only on the code; builds are reproducible (`/Brepro`). It then fingerprints the files the game's zip ships, and compares that with the fingerprint in the notes of the game's newest release. A game whose fingerprint differs is built again with the commit stamped in, packed, and, with `-publish`, released as `<game>-<yyyy.MM.dd>-<commit>`, with its `release.md` as title and notes. A change to a tool the game does not ship, or to anything outside the code, leaves its release alone.
+A game is released only when its release files change. `release.ps1` builds every game under `games` with `-buildCommit unversioned`, so the DLLs depend only on the code; builds are reproducible (`/Brepro`). It then fingerprints the files the game's zip ships, and compares that with the fingerprint in the notes of the game's newest release. A game whose fingerprint differs is built again with the commit stamped in, packed, and, with `-publish`, released as `<game>-<yyyy.MM.dd>-<commit>`, with its `release.md` as title and notes. A change to a tool the game does not ship, or to anything outside the code, leaves its release alone. A game with no `release.md` yet is built but never released.
 
 `.github/workflows/release.yml` runs `release.ps1 -test` on each pull request to `main`, which reports the games that would be released, and `release.ps1 -test -publish` on each push to `main`.
 

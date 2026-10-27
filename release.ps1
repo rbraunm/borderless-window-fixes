@@ -4,10 +4,11 @@ Publishes a GitHub release for each game whose release files changed since its l
 
 .DESCRIPTION
 For every game under games: builds it stamped "unversioned" in place of the commit, so the DLLs depend only on the
-code, and takes the release's fingerprint (layout.ps1). A game whose newest release carries the same fingerprint in
-its notes is left alone. Otherwise it is built again stamped with the checked-out commit, packed by package.ps1 into
-releases\borderless-window-fixes-<game>.zip and, with -publish, released as <game>-<yyyy.MM.dd>-<commit> with its
-release.md as title and notes. -test runs the Python client's tests with each build. Without -publish it only reports which games would be released. gh must be logged in.
+code; a game with no release.md yet stops there. Otherwise it takes the release's fingerprint (layout.ps1). A game
+whose newest release carries the same fingerprint in its notes is left alone. Otherwise it is built again stamped with
+the checked-out commit, packed by package.ps1 into releases\borderless-window-fixes-<game>.zip and, with -publish,
+released as <game>-<yyyy.MM.dd>-<commit> with its release.md as title and notes. -test runs the Python client's tests
+with each build. Without -publish it only reports which games would be released. gh must be logged in.
 #>
 param(
   [switch]$test,
@@ -63,6 +64,9 @@ function Publish-Game {
   $releasesFolder = Join-Path $PSScriptRoot "releases"
   New-Item -ItemType Directory -Path $releasesFolder -Force | Out-Null
   $zipPath = Join-Path $releasesFolder "borderless-window-fixes-$game.zip"
+  if (Test-Path -LiteralPath $zipPath) {
+    Remove-Item -LiteralPath $zipPath
+  }
   Invoke-Script "package.ps1" @("-game", $game, "-outputPath", $zipPath)
   if (-not $publish) {
     return
@@ -89,6 +93,10 @@ foreach ($game in (Get-ChildItem -Directory -LiteralPath (Join-Path $PSScriptRoo
     $arguments += "-test"
   }
   Invoke-Script "build.ps1" $arguments
+  if (-not (Test-Path -LiteralPath (Join-Path (Get-GameFolder $game) "release.md"))) {
+    Write-ReleaseLog "$game has no release.md: built, not released"
+    continue
+  }
   $fingerprint = Get-ReleaseFingerprint $game
   $published = Get-PublishedFingerprint $game
   if ($published -eq $fingerprint) {

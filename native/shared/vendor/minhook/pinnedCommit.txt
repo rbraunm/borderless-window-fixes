@@ -1,0 +1,4 @@
+upstream: https://github.com/TsudaKageyu/minhook
+commit: 8af6b4acae5a9388fd742b56fa79ece89d96f823
+commitDate: 2026-09-08
+vendored: include/, src/, LICENSE.txt (unmodified)

@@ -1,0 +1,22 @@
+# Script mode: cmake -DoutputPath=<path> -DdefaultFileCount=<n> -DdefaultFile0=<path> ... -P embedDefaultFiles.cmake
+# Writes a C++ source holding each settings file with CRLF line endings, as the table defaultFiles.h declares. A tool
+# without settings files gets an empty table.
+set(arrays "")
+set(entries "")
+if(defaultFileCount GREATER 0)
+  math(EXPR lastIndex "${defaultFileCount} - 1")
+  foreach(index RANGE ${lastIndex})
+    set(sourcePath "${defaultFile${index}}")
+    file(READ "${sourcePath}" contents)
+    string(REPLACE "\r\n" "\n" contents "${contents}")
+    string(REPLACE "\n" "\r\n" contents "${contents}")
+    string(HEX "${contents}" hexContents)
+    string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," bytes "${hexContents}")
+    get_filename_component(fileName "${sourcePath}" NAME)
+    string(APPEND arrays "static const char defaultFile${index}[] = { ${bytes}0x00 };\n")
+    string(APPEND entries "  { \"${fileName}\", defaultFile${index}, sizeof(defaultFile${index}) - 1 },\n")
+  endforeach()
+else()
+  set(entries "  { nullptr, nullptr, 0 },\n")
+endif()
+file(WRITE "${outputPath}" "#include \"defaultFiles.h\"\n\n${arrays}\nconst DefaultFile defaultFiles[] = {\n${entries}};\nconst size_t defaultFileCount = ${defaultFileCount};\n")

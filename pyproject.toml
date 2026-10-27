@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "borderlessWindowFixes"
+version = "0.1.0"
+description = "Drives games with their borderless-window fixes from outside, for iterating on the tools."
+requires-python = ">=3.14"
+dependencies = ["pillow==12.3.0"]
+
+[tool.setuptools.packages.find]
+where = ["python"]
+include = ["windowFixes"]

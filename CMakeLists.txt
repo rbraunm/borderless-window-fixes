@@ -118,9 +118,6 @@ addToolLibrary(displayGuard displayGuard "${nativeDirectory}/displayGuard")
 
 addToolLibrary(borderlessFit borderlessFit "${nativeDirectory}/borderlessFit")
 
-addToolLibrary(compatibilityUndo compatibilityUndo "${nativeDirectory}/compatibilityUndo")
-target_link_libraries(compatibilityUndo PRIVATE ntdll)
-
 # A game's own tools live in games/<game>/native/<tool>, built the same way.
 file(GLOB gameToolFolders LIST_DIRECTORIES true "${gameDirectory}/native/*")
 foreach(gameToolFolder IN LISTS gameToolFolders)

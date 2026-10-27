@@ -24,8 +24,14 @@ typedef BOOL (WINAPI* ShowWindowFunction)(HWND, int);
 typedef BOOL (WINAPI* SetForegroundWindowFunction)(HWND);
 typedef BOOL (WINAPI* SwapBuffersFunction)(HDC);
 // The system call every display mode change ends in, whoever asks; its arguments are not part of any public
-// header and differ between Windows versions, so they are passed through unread.
+// header and differ between Windows versions, so they are passed through unread. x64's caller removes them; on x86 the
+// stub does (ret 0x10), so the count must match it exactly.
+#if defined(_M_IX86)
+typedef LONG (WINAPI* NtUserChangeDisplaySettingsFunction)(void*, void*, void*, void*);
+static const unsigned char ntUserChangeDisplaySettingsReturn[] = { 0xC2, 0x10, 0x00 };
+#else
 typedef LONG (WINAPI* NtUserChangeDisplaySettingsFunction)(void*, void*, void*, void*, void*);
+#endif
 
 // SDL2's public signatures; SDL_bool is an int-sized enum.
 struct SdlVersion {
@@ -361,9 +367,32 @@ BOOL WINAPI setForegroundWindowDetour(HWND window) {
   return result;
 }
 
+#if defined(_M_IX86)
+// A system call stub is a few instructions ending in ret with the size of its arguments; one that does not end in the
+// expected return takes a different number of them on this Windows.
+static void requireStubReturn(const char* moduleName, const char* exportName, const unsigned char* expectedReturn,
+    size_t returnSize) {
+  const unsigned char* stub = static_cast<const unsigned char*>(resolveLoadedExport(moduleName, exportName));
+  const size_t stubLimit = 32;
+  for (size_t offset = 0; offset + returnSize <= stubLimit; offset++) {
+    if (memcmp(stub + offset, expectedReturn, returnSize) == 0) {
+      return;
+    }
+  }
+  fatalError("%s!%s does not end in the expected return: this Windows passes it a different number of arguments",
+    moduleName, exportName);
+}
+#endif
+
+#if defined(_M_IX86)
+LONG WINAPI ntUserChangeDisplaySettingsDetour(void* first, void* second, void* third, void* fourth) {
+  void* const returnAddress = _ReturnAddress();
+  const LONG result = originalNtUserChangeDisplaySettings(first, second, third, fourth);
+#else
 LONG WINAPI ntUserChangeDisplaySettingsDetour(void* first, void* second, void* third, void* fourth, void* fifth) {
   void* const returnAddress = _ReturnAddress();
   const LONG result = originalNtUserChangeDisplaySettings(first, second, third, fourth, fifth);
+#endif
   char caller[MAX_PATH + 32];
   writeLogLine("INFO", "ntUserChangeDisplaySettings result=%ld threadID=%lu foreground=%s caller=%s", result, GetCurrentThreadId(),
     isGameInForeground() ? "true" : "false", describeCaller(returnAddress, caller, sizeof(caller)));
@@ -535,6 +564,10 @@ void installFocusReporting(DWORD mainThreadID) {
   hookExport("user32.dll", "ShowWindow", &showWindowDetour, &originalShowWindow);
   hookExport("user32.dll", "SetForegroundWindow", &setForegroundWindowDetour, &originalSetForegroundWindow);
   hookExport("gdi32.dll", "SwapBuffers", &swapBuffersDetour, &originalSwapBuffers);
+#if defined(_M_IX86)
+  requireStubReturn("win32u.dll", "NtUserChangeDisplaySettings", ntUserChangeDisplaySettingsReturn,
+    sizeof(ntUserChangeDisplaySettingsReturn));
+#endif
   hookExport("win32u.dll", "NtUserChangeDisplaySettings", &ntUserChangeDisplaySettingsDetour, &originalNtUserChangeDisplaySettings);
   installSdlReporting();
   logCursorState("load");

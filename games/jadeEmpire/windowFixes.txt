@@ -1,7 +1,6 @@
 # The tools fixLoader loads into Jade Empire, one DLL per line in load order, from the windowFixes folder.
 # A line starting with # switches that tool off. A tool a newer release adds is appended here with its
 # shipped state; a line naming a tool the release does not ship is removed and noted in the loader's log.
-compatibilityUndo.dll
 steamLocator.dll
 configBypass.dll
 #borderlessFit.dll

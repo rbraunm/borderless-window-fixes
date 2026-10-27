@@ -7,9 +7,7 @@
 #include <windows.h>
 
 #include <cmath>
-#include <cstdio>
 #include <cstring>
-#include <string>
 #include <unordered_map>
 
 #ifndef windowFixesBuildCommit
@@ -19,16 +17,13 @@
 typedef void (__thiscall* PhysicsStepFunction)(void* object);
 
 static const char* const toolName = "physicsTimestep";
-static const char* const physicsTimestepVersion = "0.2.0";
+static const char* const physicsTimestepVersion = "0.3.0";
 static const char* const configurationFileName = "physicsTimestep.cfg";
-static const char* const frameLimitFileName = "d3d9Borderless.cfg";
 static const char* const gameProgramName = "JadeEmpire.exe";
 static const double originalStepsPerSecond = 30.0;
-// One frame can run this many steps to catch up; an object further behind starts its steps over.
-static const int catchUpStepLimit = 4;
-// A step taken from a frame's real time (stepsPerSecond=0) stays within these bounds, as the game's own frame time does.
-static const double shortestStep = 0.001;
-static const double longestStep = 0.25;
+// One frame catches up at most this much time, as the game caps its own frame time; an object further behind starts its
+// steps over.
+static const double longestCatchUpSeconds = 0.25;
 static const size_t prunedObjectCount = 4096;
 static const LONGLONG summaryMilliseconds = 60000;
 
@@ -56,9 +51,9 @@ static DWORD gameMainThreadID = 0;
 static PhysicsStepFunction originalForcesStep = nullptr;
 static PhysicsStepFunction originalIntegrateStep = nullptr;
 static LONGLONG counterFrequency = 0;
-// 0: one step per frame from the frame's real time; otherwise fixed steps at this rate.
-static double stepsPerSecond = 0.0;
+static unsigned long stepsPerSecond = 0;
 static LONGLONG fixedStepTicks = 0;
+static LONGLONG catchUpTicks = 0;
 // What the patched code reads: the step in seconds, and the power the kept share of motion is raised to.
 static float stepSeconds = 0.0f;
 static double keepExponent = 1.0;
@@ -113,8 +108,9 @@ static void runStep(void* object, double seconds) {
   stepsRun++;
 }
 
-// Takes over the pair: the game calls the forces step, this runs as many whole steps (forces then integration) as
-// the object's real time calls for, and the game's own integration call that follows does nothing.
+// Takes over the pair: the game calls the forces step once per frame, this runs as many whole fixed steps (forces then
+// integration) as the object's real time calls for, none to several, and the game's own integration call that follows
+// does nothing. The steps per second never depend on the frame rate.
 static void __fastcall forcesStepDetour(void* object, void* unusedEdx) {
   (void)unusedEdx;
   if (GetCurrentThreadId() != gameMainThreadID) {
@@ -128,14 +124,7 @@ static void __fastcall forcesStepDetour(void* object, void* unusedEdx) {
     }
   }
   LONGLONG& nextStep = nextStepOf[object];
-  if (stepsPerSecond == 0.0) {
-    double seconds = nextStep == 0 ? 1.0 / originalStepsPerSecond : static_cast<double>(now - nextStep) / counterFrequency;
-    seconds = seconds < shortestStep ? shortestStep : seconds > longestStep ? longestStep : seconds;
-    nextStep = now;
-    runStep(object, seconds);
-    return;
-  }
-  if (nextStep == 0 || now - nextStep > catchUpStepLimit * fixedStepTicks) {
+  if (nextStep == 0 || now - nextStep > catchUpTicks) {
     nextStep = now;
   }
   if (now < nextStep) {
@@ -143,7 +132,7 @@ static void __fastcall forcesStepDetour(void* object, void* unusedEdx) {
     return;
   }
   while (nextStep <= now) {
-    runStep(object, 1.0 / stepsPerSecond);
+    runStep(object, 1.0 / static_cast<double>(stepsPerSecond));
     nextStep += fixedStepTicks;
   }
 }
@@ -187,46 +176,12 @@ static void onPump() {
     reinterpret_cast<void**>(&originalIntegrateStep));
 }
 
-// frameRate: the frame rate d3d9Borderless holds the game to, auto being the primary monitor's refresh rate (the game
-// draws on adapter 0).
-static double frameRateLimit(const std::string& toolDirectory) {
-  const std::string path = toolDirectory + "\\" + frameLimitFileName;
-  FILE* file = fopen(path.c_str(), "r");
-  if (file == nullptr) {
-    fatalError("%s: stepsPerSecond=frameRate needs %s, which is missing", configurationFileName, path.c_str());
-  }
-  char line[256];
-  std::string limit;
-  while (fgets(line, sizeof(line), file) != nullptr) {
-    if (strncmp(line, "frameRateLimit=", 15) == 0) {
-      limit = line + 15;
-      limit.erase(limit.find_last_not_of(" \t\r\n") + 1);
-    }
-  }
-  fclose(file);
-  if (limit == "auto") {
-    DEVMODEA desktop = {};
-    desktop.dmSize = sizeof(desktop);
-    if (!EnumDisplaySettingsA(nullptr, ENUM_CURRENT_SETTINGS, &desktop)) {
-      fatalError("EnumDisplaySettings failed for the primary monitor");
-    }
-    return desktop.dmDisplayFrequency;
-  }
-  const double rate = strtod(limit.c_str(), nullptr);
-  if (limit.empty() || limit.find_first_not_of("0123456789") != std::string::npos || rate == 0.0) {
-    fatalError("%s: stepsPerSecond=frameRate needs a frame rate limit in %s, which has frameRateLimit=%s",
-      configurationFileName, frameLimitFileName, limit.c_str());
-  }
-  return rate;
-}
-
 extern "C" {
 
 // The game simulates its physics objects (cloth among them) one 1/30 s step per frame, right at its own 30 frames per
-// second cap and faster the higher the frame rate. This steps them by real time instead: stepsPerSecond fixed steps a
-// second (30 is the original game; frameRate matches d3d9Borderless's frame rate limit), or one step per frame from
-// the frame's own time with 0. The damping each step applies is scaled to keep the original's per second. In the
-// configuration program it does nothing. Every failure is fatal.
+// second cap and faster the higher the frame rate. This steps them by real time instead, stepsPerSecond fixed steps a
+// second (30 is the original game) whatever the frame rate, and scales the damping each step applies to keep the
+// original's per second. In the configuration program it does nothing. Every failure is fatal.
 __declspec(dllexport) DWORD Load(const ToolHost* host) {
   if (isLoaded) {
     fatalError("Load was called twice");
@@ -248,25 +203,17 @@ __declspec(dllexport) DWORD Load(const ToolHost* host) {
     writeLogLine("INFO", "loadComplete");
     return 0;
   }
-  std::string stepsText;
   const SettingDefinition definitions[] = {
-    { "stepsPerSecond", SettingKind::text, &stepsText, false },
+    { "stepsPerSecond", SettingKind::positiveInteger, &stepsPerSecond, false },
   };
   loadSettingsFile(host->toolDirectory, configurationFileName, definitions, sizeof(definitions) / sizeof(definitions[0]));
-  if (stepsText == "frameRate") {
-    stepsPerSecond = frameRateLimit(host->toolDirectory);
-  } else if (stepsText.find_first_not_of("0123456789") == std::string::npos && stepsText.size() <= 4) {
-    stepsPerSecond = strtod(stepsText.c_str(), nullptr);
-  } else {
-    fatalError("%s: stepsPerSecond must be frameRate, 0 or a number of steps per second, not %s", configurationFileName,
-      stepsText.c_str());
-  }
-  writeLogLine("INFO", "configurationLoaded stepsPerSecond=%s chosen=%.0f", stepsText.c_str(), stepsPerSecond);
+  writeLogLine("INFO", "configurationLoaded stepsPerSecond=%lu", stepsPerSecond);
   gameMainThreadID = host->mainThreadID;
   LARGE_INTEGER frequency;
   QueryPerformanceFrequency(&frequency);
   counterFrequency = frequency.QuadPart;
-  fixedStepTicks = stepsPerSecond != 0.0 ? static_cast<LONGLONG>(counterFrequency / stepsPerSecond) : 0;
+  fixedStepTicks = counterFrequency / static_cast<LONGLONG>(stepsPerSecond);
+  catchUpTicks = static_cast<LONGLONG>(longestCatchUpSeconds * static_cast<double>(counterFrequency));
   initializeHookRegistry();
   host->addPumpCallback(&onPump);
   writeLogLine("INFO", "loadComplete");

@@ -16,7 +16,7 @@ Started from the AmmolitePreservation client toolsets (clearcoat, scarab, ddo-cl
 ## Games
 | Game | Folder | Status |
 |---|---|---|
-| SOMA (Steam 282140, `Soma.exe` 1.110, HPL3 on SDL2 and OpenGL) | `games/soma` | Testing borderlessFit. The NVIDIA driver takes the monitor over whenever SOMA's OpenGL window exactly covers it and is in front, switching an HDR monitor to SDR and back on each focus change, which blanks it for 2 to 3 seconds. Setting the driver's OpenGL present method to native does not change that. |
+| SOMA (Steam 282140, `Soma.exe` 1.110, HPL3 on SDL2 and OpenGL) | `games/soma` | Fixed by borderlessFit (taller). The NVIDIA driver took the monitor over whenever SOMA's OpenGL window exactly covered it and was in front, switching an HDR monitor to SDR and back on each focus change, which blanked it for 2 to 3 seconds; the driver's OpenGL present method made no difference. Open: no sound in the background, since the game sleeps while out of focus (`SleepWhenOutOfFocus`). |
 
 ## Game folder layout
 ```

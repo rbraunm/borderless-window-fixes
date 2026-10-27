@@ -8,6 +8,8 @@
 #include <d3d9.h>
 #include <winternl.h>
 
+#include <string>
+
 #ifndef windowFixesBuildCommit
 #error "windowFixesBuildCommit must be defined by the build (see build.ps1)"
 #endif
@@ -31,7 +33,7 @@ typedef HRESULT (STDMETHODCALLTYPE* ResetFunction)(IDirect3DDevice9*, D3DPRESENT
 typedef HRESULT (STDMETHODCALLTYPE* PresentFunction)(IDirect3DDevice9*, const RECT*, const RECT*, HWND, const RGNDATA*);
 
 static const char* const toolName = "d3d9Borderless";
-static const char* const d3d9BorderlessVersion = "0.2.0";
+static const char* const d3d9BorderlessVersion = "0.3.0";
 static const char* const configurationFileName = "d3d9Borderless.cfg";
 static const ULONG dllLoadedReason = 1;
 // Positions in the COM interfaces' method tables, from d3d9.h's declaration order.
@@ -54,6 +56,8 @@ static CreateDeviceFunction originalCreateDevice = nullptr;
 static ResetFunction originalReset = nullptr;
 static PresentFunction originalPresent = nullptr;
 static unsigned long frameRateLimit = 0;
+// frameRateLimit=auto: the device window's monitor refresh rate, known once the device exists.
+static bool isFrameRateAuto = false;
 static LONGLONG counterFrequency = 0;
 static LONGLONG framePeriod = 0;
 static LONGLONG nextFrame = 0;
@@ -110,9 +114,11 @@ static void makeBorderless(HWND window, const char* reason) {
   const MONITORINFOEXA monitor = monitorOf(window);
   const RECT& bounds = monitor.rcMonitor;
   SetWindowLongPtrA(window, GWL_EXSTYLE, GetWindowLongPtrA(window, GWL_EXSTYLE) & ~static_cast<LONG_PTR>(WS_EX_TOPMOST));
-  SetWindowLongPtrA(window, GWL_STYLE, WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN);
+  // Showing the window stays the game's call: shown before its first frame, it flashes empty.
+  const LONG_PTR visible = GetWindowLongPtrA(window, GWL_STYLE) & WS_VISIBLE;
+  SetWindowLongPtrA(window, GWL_STYLE, WS_POPUP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | visible);
   if (!SetWindowPos(window, HWND_NOTOPMOST, bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top,
-      SWP_FRAMECHANGED | SWP_SHOWWINDOW)) {
+      SWP_FRAMECHANGED | SWP_NOACTIVATE)) {
     fatalError("SetWindowPos failed for the game window (error %lu)", GetLastError());
   }
   writeLogLine("INFO", "windowBorderless reason=%s window=%p monitor=%s left=%ld top=%ld width=%ld height=%ld", reason,
@@ -183,6 +189,12 @@ static HRESULT STDMETHODCALLTYPE createDeviceDetour(IDirect3D9* direct3d, UINT a
   if (FAILED(result)) {
     return result;
   }
+  HWND deviceWindow = parameters->hDeviceWindow != nullptr ? parameters->hDeviceWindow : focusWindow;
+  if (isFrameRateAuto && frameRateLimit == 0) {
+    frameRateLimit = desktopModeOf(monitorOf(deviceWindow)).dmDisplayFrequency;
+    framePeriod = counterFrequency / frameRateLimit;
+    writeLogLine("INFO", "frameRateLimitChosen source=refreshRate framesPerSecond=%lu", frameRateLimit);
+  }
   if (InterlockedExchange(&isDeviceHooked, 1) == 0) {
     installHook("IDirect3DDevice9::Reset", methodOf(*device, resetIndex), reinterpret_cast<void*>(&resetDetour),
       reinterpret_cast<void**>(&originalReset));
@@ -191,7 +203,7 @@ static HRESULT STDMETHODCALLTYPE createDeviceDetour(IDirect3D9* direct3d, UINT a
         reinterpret_cast<void**>(&originalPresent));
     }
   }
-  makeBorderless(parameters->hDeviceWindow != nullptr ? parameters->hDeviceWindow : focusWindow, "create");
+  makeBorderless(deviceWindow, "create");
   return result;
 }
 
@@ -242,16 +254,25 @@ __declspec(dllexport) DWORD Load(const ToolHost* host) {
   openSessionLog(host->toolDirectory, toolName, host->sessionStamp);
   writeLogLine("INFO", "sessionStart version=%s buildCommit=%s mainThreadID=%lu", d3d9BorderlessVersion,
     windowFixesBuildCommit, GetCurrentThreadId());
+  std::string limitText;
   const SettingDefinition definitions[] = {
-    { "frameRateLimit", SettingKind::wholeNumber, &frameRateLimit, false },
+    { "frameRateLimit", SettingKind::text, &limitText, false },
   };
   loadSettingsFile(host->toolDirectory, configurationFileName, definitions, sizeof(definitions) / sizeof(definitions[0]));
-  writeLogLine("INFO", "configurationLoaded frameRateLimit=%lu", frameRateLimit);
-  if (frameRateLimit != 0) {
+  if (limitText == "auto") {
+    isFrameRateAuto = true;
+  } else if (limitText.find_first_not_of("0123456789") == std::string::npos && limitText.size() <= 4) {
+    frameRateLimit = strtoul(limitText.c_str(), nullptr, 10);
+  } else {
+    fatalError("%s: frameRateLimit must be auto, 0 or a number of frames per second, not %s", configurationFileName,
+      limitText.c_str());
+  }
+  writeLogLine("INFO", "configurationLoaded frameRateLimit=%s", limitText.c_str());
+  if (isFrameRateAuto || frameRateLimit != 0) {
     LARGE_INTEGER frequency;
     QueryPerformanceFrequency(&frequency);
     counterFrequency = frequency.QuadPart;
-    framePeriod = counterFrequency / frameRateLimit;
+    framePeriod = frameRateLimit != 0 ? counterFrequency / frameRateLimit : 0;
     frameTimer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
     if (frameTimer == nullptr) {
       fatalError("Could not create a high resolution timer (error %lu)", GetLastError());

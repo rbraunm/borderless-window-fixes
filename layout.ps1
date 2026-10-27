@@ -9,7 +9,7 @@ the windowFixes folder beside it gets every tool the game's windowFixes.txt name
 replaces. No settings files: each tool carries its own and writes or updates them in the windowFixes folder when the
 game starts, so a player's settings are never replaced. The diagnostic tools never ship; Copy-ToolLayout -diagnostics
 adds them to an install, and the loader keeps a listed tool whose DLL the folder holds. game.cfg's architecture (x64
-or x86) picks the build; stabilityGuard is x64 only.
+or x86) picks the build.
 #>
 
 $repositoryFolder = $PSScriptRoot
@@ -43,6 +43,24 @@ function Get-GameExecutable {
   return Get-GameSetting $game "executable"
 }
 
+function Get-GameCompanions {
+  # Programs beside the game's executable that also get the tools, such as a launcher step the game cannot start
+  # without: file names, any number of companion= lines.
+  param([string]$game)
+  $configPath = Join-Path (Get-GameFolder $game) "game.cfg"
+  $companions = @()
+  foreach ($line in Get-Content -LiteralPath $configPath) {
+    if ($line -match '^\s*companion\s*=\s*(.+?)\s*$') {
+      $companion = $Matches[1]
+      if ($companion -notmatch '^[^\\/:|]+\.exe$') {
+        throw "$configPath`: companion must be an .exe file name beside the executable, not $companion"
+      }
+      $companions += $companion
+    }
+  }
+  return $companions
+}
+
 function Get-GameArchitecture {
   param([string]$game)
   $architecture = Get-GameSetting $game "architecture"
@@ -53,11 +71,7 @@ function Get-GameArchitecture {
 }
 
 function Get-DiagnosticTools {
-  param([string]$game)
-  if ((Get-GameArchitecture $game) -eq "x64") {
-    return @("stabilityGuard.dll", "displayGuard.dll")
-  }
-  return @("displayGuard.dll")
+  return @("stabilityGuard.dll", "displayGuard.dll")
 }
 
 function Get-ShippedTools {
@@ -120,7 +134,7 @@ function Add-DiagnosticTools {
   param([string]$game, [string]$clientFolder)
   $binaryFolder = Join-Path (Join-Path (Join-Path $repositoryFolder "build") $game) "bin"
   $toolsFolder = Join-Path $clientFolder "windowFixes"
-  $diagnosticTools = @(Get-DiagnosticTools $game)
+  $diagnosticTools = @(Get-DiagnosticTools)
   foreach ($tool in $diagnosticTools) {
     Copy-LayoutFile (Join-Path $binaryFolder $tool) $toolsFolder
   }

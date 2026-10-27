@@ -99,7 +99,7 @@ static void writeFaultDetail(const EXCEPTION_RECORD* record, char* buffer, size_
 static void writeThreadDetail(const CONTEXT* context) {
   writeFrameWalk("crash", context);
   uintptr_t slots[stackScanSlotLimit];
-  writeStackCandidates("crash", slots, copyStackSlots(static_cast<uintptr_t>(context->Rsp), slots, settings.stackScanSlots));
+  writeStackCandidates("crash", slots, copyStackSlots(contextStackPointer(context), slots, settings.stackScanSlots));
   writeModuleList("crash");
 }
 

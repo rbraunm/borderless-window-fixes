@@ -26,7 +26,7 @@ $buildDirectory = Join-Path (Join-Path $PSScriptRoot "build") $game
 $binaryDirectory = Join-Path $buildDirectory "bin"
 $requiredExports = @{ "version.dll" = "GetFileVersionInfoA" }
 $architecture = Get-GameArchitecture $game
-foreach ($tool in @(Get-ShippedTools $game) + @(Get-DiagnosticTools $game)) {
+foreach ($tool in @(Get-ShippedTools $game) + @(Get-DiagnosticTools)) {
   $requiredExports[$tool] = "Load"
 }
 
@@ -108,7 +108,7 @@ if (-not $buildCommit) {
 }
 Write-BuildLog "Building commit $buildCommit for $game"
 Invoke-NativeStep "CMake configure" {
-  & cmake.exe -S $PSScriptRoot -B $buildDirectory -G Ninja -DCMAKE_BUILD_TYPE=Release "-DwindowFixesBuildCommit=$buildCommit" "-Dgame=$game" "-DgameArchitecture=$architecture" "-DgameExecutable=$(Split-Path -Leaf (Get-GameExecutable $game))"
+  & cmake.exe -S $PSScriptRoot -B $buildDirectory -G Ninja -DCMAKE_BUILD_TYPE=Release "-DwindowFixesBuildCommit=$buildCommit" "-Dgame=$game" "-DgameArchitecture=$architecture" "-DgameExecutables=$((@(Split-Path -Leaf (Get-GameExecutable $game)) + @(Get-GameCompanions $game)) -join '|')"
 }
 Invoke-NativeStep "CMake build" { & cmake.exe --build $buildDirectory }
 foreach ($fileName in $requiredExports.Keys) {

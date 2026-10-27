@@ -12,7 +12,7 @@ class Game:
     if not configPath.is_file():
       known = sorted(path.parent.name for path in gamesFolder.glob("*/game.cfg"))
       raise ValueError(f"no game named {name!r}; the games are {', '.join(known)}")
-    settings = {"executable": [], "architecture": []}
+    settings = {"executable": [], "architecture": [], "companion": []}
     for line in configPath.read_text(encoding="ascii").splitlines():
       line = line.strip()
       if line and not line.startswith("#"):
@@ -20,7 +20,8 @@ class Game:
         if not separator or key.strip() not in settings:
           raise ValueError(f"{configPath}: unknown line {line!r}")
         settings[key.strip()].append(value.strip())
-    for key, values in settings.items():
+    for key in ("executable", "architecture"):
+      values = settings[key]
       if len(values) != 1:
         raise ValueError(f"{configPath} must set {key} exactly once")
     executables = settings["executable"]

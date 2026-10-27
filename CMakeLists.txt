@@ -21,8 +21,8 @@ set(gameDirectory "${CMAKE_SOURCE_DIR}/games/${game}")
 if(NOT EXISTS "${gameDirectory}/game.cfg")
   message(FATAL_ERROR "games/${game}/game.cfg does not exist")
 endif()
-if(NOT DEFINED gameExecutable)
-  message(FATAL_ERROR "gameExecutable is not set (build.ps1 sets it from game.cfg)")
+if(NOT DEFINED gameExecutables)
+  message(FATAL_ERROR "gameExecutables is not set (build.ps1 sets it from game.cfg)")
 endif()
 if(NOT DEFINED windowFixesBuildCommit)
   message(FATAL_ERROR "windowFixesBuildCommit is not set (build.ps1 sets it from git)")
@@ -108,18 +108,18 @@ endif()
 addToolLibrary(fixLoader version "${nativeDirectory}/fixLoader"
   SOURCES "${nativeDirectory}/fixLoader/source/exports.def" ${versionStubs}
   SETTINGS "${gameDirectory}/windowFixes.txt")
-target_compile_definitions(fixLoader PRIVATE "windowFixesGameExecutable=\"${gameExecutable}\"")
+target_compile_definitions(fixLoader PRIVATE "windowFixesGameExecutables=\"${gameExecutables}\"")
 
 # dbghelp is loaded at runtime from the system folder, so it is not linked.
-# Its stack walking reads x64 unwind tables.
-if(gameArchitecture STREQUAL "x64")
-  addToolLibrary(stabilityGuard stabilityGuard "${nativeDirectory}/stabilityGuard")
-  target_link_libraries(stabilityGuard PRIVATE psapi)
-endif()
+addToolLibrary(stabilityGuard stabilityGuard "${nativeDirectory}/stabilityGuard")
+target_link_libraries(stabilityGuard PRIVATE psapi)
 
 addToolLibrary(displayGuard displayGuard "${nativeDirectory}/displayGuard")
 
 addToolLibrary(borderlessFit borderlessFit "${nativeDirectory}/borderlessFit")
+
+addToolLibrary(compatibilityUndo compatibilityUndo "${nativeDirectory}/compatibilityUndo")
+target_link_libraries(compatibilityUndo PRIVATE ntdll)
 
 # A game's own tools live in games/<game>/native/<tool>, built the same way.
 file(GLOB gameToolFolders LIST_DIRECTORIES true "${gameDirectory}/native/*")

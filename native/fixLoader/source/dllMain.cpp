@@ -70,8 +70,8 @@ static void runLoader() {
   writeLogLine("INFO", "loadComplete");
 }
 
-// Every program in the game's folder that imports version.dll loads this copy, such as a configuration program
-// beside the game: only the game's executable gets the tools.
+// Every program in the game's folder that imports version.dll loads this copy: only the game's executable and its
+// companions (game.cfg) get the tools.
 static bool isGameExecutable() {
   char executablePath[MAX_PATH];
   const DWORD executablePathLength = GetModuleFileNameA(nullptr, executablePath, sizeof(executablePath));
@@ -79,7 +79,17 @@ static bool isGameExecutable() {
     fatalError("Could not resolve the executable path (error %lu)", GetLastError());
   }
   const char* executableName = strrchr(executablePath, '\\');
-  return _stricmp(executableName != nullptr ? executableName + 1 : executablePath, windowFixesGameExecutable) == 0;
+  executableName = executableName != nullptr ? executableName + 1 : executablePath;
+  const char* candidate = windowFixesGameExecutables;
+  while (*candidate != '\0') {
+    const char* separator = strchr(candidate, '|');
+    const size_t length = separator != nullptr ? static_cast<size_t>(separator - candidate) : strlen(candidate);
+    if (strlen(executableName) == length && _strnicmp(executableName, candidate, length) == 0) {
+      return true;
+    }
+    candidate += separator != nullptr ? length + 1 : length;
+  }
+  return false;
 }
 
 extern "C" BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {

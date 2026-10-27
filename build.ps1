@@ -5,21 +5,25 @@
   -game names a folder under games. Everything lands in build\<game>\bin: version.dll (fixLoader, carrying the
   game's tool list) and the tool DLLs, which carry their settings files. -test runs the Python client's tests in the
   repository's .venv. -gameFolder installs the build into the game's install folder as a release lays it out
-  (layout.ps1), leaving the folder's settings files to the tools.
+  (layout.ps1), leaving the folder's settings files to the tools; -diagnostics adds the diagnostic tools to it.
 .EXAMPLE
-  .\build.ps1 -game soma -test -gameFolder "S:\Games\Steam\steamapps\common\SOMA"
+  .\build.ps1 -game soma -test -diagnostics -gameFolder "<SOMA install folder>"
 #>
 param(
   [Parameter(Mandatory = $true)][string]$game,
   [switch]$test,
-  [string]$gameFolder
+  [string]$gameFolder,
+  [switch]$diagnostics
 )
+if ($diagnostics -and -not $gameFolder) {
+  throw "-diagnostics adds the diagnostic tools to the -gameFolder install"
+}
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "layout.ps1")
 $buildDirectory = Join-Path (Join-Path $PSScriptRoot "build") $game
 $binaryDirectory = Join-Path $buildDirectory "bin"
 $requiredExports = @{ "version.dll" = "GetFileVersionInfoA" }
-foreach ($tool in Get-ShippedTools $game) {
+foreach ($tool in @(Get-ShippedTools $game) + $diagnosticTools) {
   $requiredExports[$tool] = "Load"
 }
 
@@ -90,7 +94,7 @@ function Test-LibraryExport {
 
 function Install-Build {
   param([string]$folder)
-  Write-BuildLog ("Installed " + (Copy-ToolLayout $game $folder) + " into $folder")
+  Write-BuildLog ("Installed " + (Copy-ToolLayout $game $folder -diagnostics:$diagnostics) + " into $folder")
 }
 
 Import-VisualStudioEnvironment

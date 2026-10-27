@@ -1,16 +1,18 @@
 <#
 .SYNOPSIS
-Copy-ToolLayout lays out a game's build\<game>\bin as it goes into that game's install folder, so an install and a
-release hold the same files.
+Lays out a game's build\<game>\bin as it goes into that game's install folder, so an install and a release hold the
+same files.
 
 .DESCRIPTION
 games\<game>\game.cfg names the game's executable relative to its install folder: version.dll goes beside it, and
 the windowFixes folder beside it gets every tool the game's windowFixes.txt names, all of which a newer build
 replaces. No settings files: each tool carries its own and writes or updates them in the windowFixes folder when the
-game starts, so a player's settings are never replaced.
+game starts, so a player's settings are never replaced. The diagnostic tools never ship; Copy-ToolLayout -diagnostics
+adds them to an install, and the loader keeps a listed tool whose DLL the folder holds.
 #>
 
 $repositoryFolder = $PSScriptRoot
+$diagnosticTools = @("stabilityGuard.dll", "displayGuard.dll")
 
 function Get-GameFolder {
   param([string]$game)
@@ -64,20 +66,47 @@ function Copy-LayoutFile {
   Copy-Item -LiteralPath $sourcePath -Destination $destinationFolder -Force
 }
 
-function Copy-ToolLayout {
-  param([string]$game, [string]$destination)
+function Copy-ReleaseFiles {
+  param([string]$game, [string]$clientFolder)
   $binaryFolder = Join-Path (Join-Path (Join-Path $repositoryFolder "build") $game) "bin"
+  $tools = Get-ShippedTools $game
+  Copy-LayoutFile (Join-Path $binaryFolder "version.dll") $clientFolder
+  foreach ($tool in $tools) {
+    Copy-LayoutFile (Join-Path $binaryFolder $tool) (Join-Path $clientFolder "windowFixes")
+  }
+  return "version.dll, tools $($tools -join ', ')"
+}
+
+function Add-DiagnosticTools {
+  param([string]$game, [string]$clientFolder)
+  $binaryFolder = Join-Path (Join-Path (Join-Path $repositoryFolder "build") $game) "bin"
+  $toolsFolder = Join-Path $clientFolder "windowFixes"
+  foreach ($tool in $diagnosticTools) {
+    Copy-LayoutFile (Join-Path $binaryFolder $tool) $toolsFolder
+  }
+  $listPath = Join-Path $toolsFolder "windowFixes.txt"
+  $lines = @()
+  if (Test-Path -LiteralPath $listPath) {
+    $lines = @(Get-Content -LiteralPath $listPath)
+  }
+  $listed = @($lines | ForEach-Object { $_.Trim().TrimStart("#").Trim() })
+  $missing = @($diagnosticTools | Where-Object { $listed -notcontains $_ })
+  if ($missing.Count -gt 0) {
+    [System.IO.File]::WriteAllText($listPath, ((@($missing) + $lines) -join "`r`n"), [System.Text.Encoding]::ASCII)
+  }
+  return "diagnostic tools $($diagnosticTools -join ', ')"
+}
+
+function Copy-ToolLayout {
+  param([string]$game, [string]$destination, [switch]$diagnostics)
   $executablePath = Join-Path $destination (Get-GameExecutable $game)
   if (-not (Test-Path -LiteralPath $executablePath)) {
     throw "$destination has no $(Get-GameExecutable $game)"
   }
   $clientFolder = Split-Path $executablePath
-  $toolsFolder = Join-Path $clientFolder "windowFixes"
-  $tools = Get-ShippedTools $game
-
-  Copy-LayoutFile (Join-Path $binaryFolder "version.dll") $clientFolder
-  foreach ($tool in $tools) {
-    Copy-LayoutFile (Join-Path $binaryFolder $tool) $toolsFolder
+  $installed = Copy-ReleaseFiles $game $clientFolder
+  if ($diagnostics) {
+    $installed += ", " + (Add-DiagnosticTools $game $clientFolder)
   }
-  return "version.dll, tools $($tools -join ', ')"
+  return $installed
 }

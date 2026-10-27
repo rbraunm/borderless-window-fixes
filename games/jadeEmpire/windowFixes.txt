@@ -5,4 +5,5 @@ steamLocator.dll
 configBypass.dll
 renderSettings.dll
 d3d9Borderless.dll
+physicsTimestep.dll
 borderlessFit.dll

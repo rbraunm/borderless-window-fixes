@@ -6,5 +6,6 @@ configBypass.dll
 renderSettings.dll
 d3d9Borderless.dll
 physicsTimestep.dll
+textureTimestep.dll
 introHold.dll
 borderlessFit.dll

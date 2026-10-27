@@ -73,7 +73,8 @@ static void runLoader() {
     initializeHookRegistry();
   }
   installPumpHooks(GetCurrentThreadId());
-  const ToolHost host = { toolsDirectory.c_str(), sessionStamp, GetCurrentThreadId(), &setPumpCallback };
+  const ToolHost host = { toolsDirectory.c_str(), sessionStamp, GetCurrentThreadId(), &addPumpCallback,
+    &removePumpCallback };
   loadListedTools(host);
   commandPipe.startForProcess(toolName, &runLoaderCommand);
   writeLogLine("INFO", "loadComplete");

@@ -268,7 +268,7 @@ __declspec(dllexport) DWORD Load(const ToolHost* host) {
   counterFrequency = frequency.QuadPart;
   fixedStepTicks = stepsPerSecond != 0.0 ? static_cast<LONGLONG>(counterFrequency / stepsPerSecond) : 0;
   initializeHookRegistry();
-  host->setPumpCallback(&onPump);
+  host->addPumpCallback(&onPump);
   writeLogLine("INFO", "loadComplete");
   return 0;
 }

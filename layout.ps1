@@ -61,6 +61,36 @@ function Get-GameCompanions {
   return $companions
 }
 
+function Get-GameLauncher {
+  # A launcher the game's Steam entry starts, which launcherSkip (msimg32.dll) replaces with the game; none when unset.
+  param([string]$game)
+  $configPath = Join-Path (Get-GameFolder $game) "game.cfg"
+  $launchers = @()
+  foreach ($line in Get-Content -LiteralPath $configPath) {
+    if ($line -match '^\s*launcher\s*=\s*(.+?)\s*$') {
+      $launcher = $Matches[1]
+      if ($launcher -notmatch '^[^\\/:|]+\.exe$') {
+        throw "$configPath`: launcher must be an .exe file name beside the executable, not $launcher"
+      }
+      $launchers += $launcher
+    }
+  }
+  if ($launchers.Count -gt 1) {
+    throw "$configPath sets launcher more than once"
+  }
+  return $launchers
+}
+
+function Get-GameProxies {
+  # The DLLs that go beside the game's executable: version.dll, and msimg32.dll for a game with a launcher.
+  param([string]$game)
+  $proxies = @("version.dll")
+  if (@(Get-GameLauncher $game).Count -eq 1) {
+    $proxies += "msimg32.dll"
+  }
+  return $proxies
+}
+
 function Get-GameArchitecture {
   param([string]$game)
   $architecture = Get-GameSetting $game "architecture"
@@ -106,11 +136,14 @@ function Copy-ReleaseFiles {
   param([string]$game, [string]$clientFolder)
   $binaryFolder = Join-Path (Join-Path (Join-Path $repositoryFolder "build") $game) "bin"
   $tools = Get-ShippedTools $game
-  Copy-LayoutFile (Join-Path $binaryFolder "version.dll") $clientFolder
+  $proxies = Get-GameProxies $game
+  foreach ($proxy in $proxies) {
+    Copy-LayoutFile (Join-Path $binaryFolder $proxy) $clientFolder
+  }
   foreach ($tool in $tools) {
     Copy-LayoutFile (Join-Path $binaryFolder $tool) (Join-Path $clientFolder "windowFixes")
   }
-  return "version.dll, tools $($tools -join ', ')"
+  return "$($proxies -join ', '), tools $($tools -join ', ')"
 }
 
 function Get-ReleaseFingerprint {
@@ -118,7 +151,7 @@ function Get-ReleaseFingerprint {
   param([string]$game)
   $binaryFolder = Join-Path (Join-Path (Join-Path $repositoryFolder "build") $game) "bin"
   $lines = @()
-  foreach ($fileName in @("version.dll") + @(Get-ShippedTools $game)) {
+  foreach ($fileName in @(Get-GameProxies $game) + @(Get-ShippedTools $game)) {
     $path = Join-Path $binaryFolder $fileName
     if (-not (Test-Path -LiteralPath $path)) {
       throw "$path is missing; run build.ps1 first"

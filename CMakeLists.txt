@@ -110,6 +110,18 @@ addToolLibrary(fixLoader version "${nativeDirectory}/fixLoader"
   SETTINGS "${gameDirectory}/windowFixes.txt")
 target_compile_definitions(fixLoader PRIVATE "windowFixesGameExecutables=\"${gameExecutables}\"")
 
+# A game with a launcher (game.cfg launcher=) gets launcherSkip as msimg32.dll, which the launcher imports: it starts the
+# game in the launcher's place.
+if(gameLauncher)
+  string(REPLACE "|" ";" gameExecutableList "${gameExecutables}")
+  list(GET gameExecutableList 0 gameExecutable)
+  addToolLibrary(launcherSkip msimg32 "${nativeDirectory}/launcherSkip"
+    SOURCES "${nativeDirectory}/launcherSkip/source/exports.def" "${nativeDirectory}/fixLoader/source/entryPointHook.cpp")
+  target_include_directories(launcherSkip PRIVATE "${nativeDirectory}/fixLoader/source")
+  target_compile_definitions(launcherSkip PRIVATE "windowFixesGameExecutable=\"${gameExecutable}\""
+    "windowFixesLauncherExecutable=\"${gameLauncher}\"")
+endif()
+
 # dbghelp is loaded at runtime from the system folder, so it is not linked.
 addToolLibrary(stabilityGuard stabilityGuard "${nativeDirectory}/stabilityGuard")
 target_link_libraries(stabilityGuard PRIVATE psapi)

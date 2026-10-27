@@ -12,7 +12,7 @@ class Game:
     if not configPath.is_file():
       known = sorted(path.parent.name for path in gamesFolder.glob("*/game.cfg"))
       raise ValueError(f"no game named {name!r}; the games are {', '.join(known)}")
-    settings = {"executable": [], "architecture": [], "companion": []}
+    settings = {"executable": [], "architecture": [], "companion": [], "launcher": []}
     for line in configPath.read_text(encoding="ascii").splitlines():
       line = line.strip()
       if line and not line.startswith("#"):

@@ -193,25 +193,19 @@ HMODULE WINAPI loadLibraryExWDetour(LPCWSTR fileName, HANDLE file, DWORD flags) 
   return module;
 }
 
-void hookExport(const char* moduleName, const char* exportName, void* detour, void** original) {
-  const std::string targetName = std::string(moduleName) + "!" + exportName;
-  const std::string moduleFile = std::string(moduleName) + ".dll";
-  installHook(targetName.c_str(), resolveLoadedExport(moduleFile.c_str(), exportName), detour, original);
-}
-
 }
 
 void installWindowReporting(DWORD mainThreadID) {
   gameMainThreadID = mainThreadID;
-  hookExport("user32", "CreateWindowExW", reinterpret_cast<void*>(&createWindowExWDetour), reinterpret_cast<void**>(&originalCreateWindowExW));
-  hookExport("user32", "CreateWindowExA", reinterpret_cast<void*>(&createWindowExADetour), reinterpret_cast<void**>(&originalCreateWindowExA));
-  hookExport("user32", "SetWindowPos", reinterpret_cast<void*>(&setWindowPosDetour), reinterpret_cast<void**>(&originalSetWindowPos));
-  hookExport("user32", "SetWindowLongPtrW", reinterpret_cast<void*>(&setWindowLongPtrWDetour), reinterpret_cast<void**>(&originalSetWindowLongPtrW));
-  hookExport("user32", "SetWindowLongPtrA", reinterpret_cast<void*>(&setWindowLongPtrADetour), reinterpret_cast<void**>(&originalSetWindowLongPtrA));
-  hookExport("user32", "ChangeDisplaySettingsExW", reinterpret_cast<void*>(&changeDisplaySettingsExWDetour),
+  installExportHook("user32.dll", "CreateWindowExW", reinterpret_cast<void*>(&createWindowExWDetour), reinterpret_cast<void**>(&originalCreateWindowExW));
+  installExportHook("user32.dll", "CreateWindowExA", reinterpret_cast<void*>(&createWindowExADetour), reinterpret_cast<void**>(&originalCreateWindowExA));
+  installExportHook("user32.dll", "SetWindowPos", reinterpret_cast<void*>(&setWindowPosDetour), reinterpret_cast<void**>(&originalSetWindowPos));
+  installExportHook("user32.dll", "SetWindowLongPtrW", reinterpret_cast<void*>(&setWindowLongPtrWDetour), reinterpret_cast<void**>(&originalSetWindowLongPtrW));
+  installExportHook("user32.dll", "SetWindowLongPtrA", reinterpret_cast<void*>(&setWindowLongPtrADetour), reinterpret_cast<void**>(&originalSetWindowLongPtrA));
+  installExportHook("user32.dll", "ChangeDisplaySettingsExW", reinterpret_cast<void*>(&changeDisplaySettingsExWDetour),
     reinterpret_cast<void**>(&originalChangeDisplaySettingsExW));
-  hookExport("user32", "ChangeDisplaySettingsExA", reinterpret_cast<void*>(&changeDisplaySettingsExADetour),
+  installExportHook("user32.dll", "ChangeDisplaySettingsExA", reinterpret_cast<void*>(&changeDisplaySettingsExADetour),
     reinterpret_cast<void**>(&originalChangeDisplaySettingsExA));
   // Every LoadLibrary variant ends in kernelbase's LoadLibraryExW; kernel32's export is only one way in.
-  hookExport("kernelbase", "LoadLibraryExW", reinterpret_cast<void*>(&loadLibraryExWDetour), reinterpret_cast<void**>(&originalLoadLibraryExW));
+  installExportHook("kernelbase.dll", "LoadLibraryExW", reinterpret_cast<void*>(&loadLibraryExWDetour), reinterpret_cast<void**>(&originalLoadLibraryExW));
 }

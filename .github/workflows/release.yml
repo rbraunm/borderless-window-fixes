@@ -1,0 +1,77 @@
+# Every game under games builds and tests on each pull request to main; on main, each gets a GitHub release of its
+# zip, named for the day and the commit built.
+name: release
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths:
+      - native/**
+      - games/**
+      - cmake/**
+      - CMakeLists.txt
+      - build.ps1
+      - layout.ps1
+      - package.ps1
+      - .github/workflows/release.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      # cmd starts each script in a PowerShell process of its own: run inside a powershell step, Windows PowerShell
+      # would turn the compiler's and pip's stderr into errors.
+      - name: Test environment
+        shell: cmd
+        run: |
+          python -m venv .venv || exit /b 1
+          .venv\Scripts\python.exe -m pip install -e .
+
+      - name: Build, test and package every game
+        shell: cmd
+        run: |
+          mkdir releases || exit /b 1
+          for /d %%g in (games\*) do (
+            powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1 -game %%~nxg -test || exit /b 1
+            powershell -NoProfile -ExecutionPolicy Bypass -File package.ps1 -game %%~nxg -outputPath releases\borderless-window-fixes-%%~nxg.zip || exit /b 1
+          )
+
+      - name: Publish each game's release
+        if: github.event_name == 'push'
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stamp = (Get-Date).ToUniversalTime().ToString("yyyy.MM.dd")
+          $commit = $env:GITHUB_SHA.Substring(0, 7)
+          foreach ($gameFolder in Get-ChildItem -Directory games) {
+            $game = $gameFolder.Name
+            $notes = @(Get-Content -Encoding UTF8 (Join-Path $gameFolder.FullName "release.md"))
+            if ($notes[0] -notmatch '^# (.+)$') {
+              throw "games\$game\release.md must start with a # title"
+            }
+            $title = "$($Matches[1]) $stamp ($commit)"
+            $notesPath = Join-Path $env:RUNNER_TEMP "$game-notes.md"
+            [System.IO.File]::WriteAllText($notesPath, (($notes | Select-Object -Skip 1) -join "`n"))
+            gh release create "$game-$stamp-$commit" "releases\borderless-window-fixes-$game.zip" --target $env:GITHUB_SHA --title $title --notes-file $notesPath
+            if ($LASTEXITCODE -ne 0) {
+              throw "gh release create failed for $game"
+            }
+          }

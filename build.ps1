@@ -4,7 +4,7 @@
 .DESCRIPTION
   -game names a folder under games. Everything lands in build\<game>\bin: version.dll (fixLoader, carrying the
   game's tool list) and the tool DLLs, which carry their settings files. -test runs the Python client's tests in the
-  repository's .venv. -gameFolder installs the build into the game's install folder as a release lays it out
+  repository's .venv. -buildCommit stamps the DLLs with that text in place of the checked-out commit. -gameFolder installs the build into the game's install folder as a release lays it out
   (layout.ps1), leaving the folder's settings files to the tools; -diagnostics adds the diagnostic tools to it.
 .EXAMPLE
   .\build.ps1 -game soma -test -diagnostics -gameFolder "<SOMA install folder>"
@@ -13,7 +13,8 @@ param(
   [Parameter(Mandatory = $true)][string]$game,
   [switch]$test,
   [string]$gameFolder,
-  [switch]$diagnostics
+  [switch]$diagnostics,
+  [string]$buildCommit
 )
 if ($diagnostics -and -not $gameFolder) {
   throw "-diagnostics adds the diagnostic tools to the -gameFolder install"
@@ -98,7 +99,9 @@ function Install-Build {
 }
 
 Import-VisualStudioEnvironment
-$buildCommit = Get-BuildCommit
+if (-not $buildCommit) {
+  $buildCommit = Get-BuildCommit
+}
 Write-BuildLog "Building commit $buildCommit for $game"
 Invoke-NativeStep "CMake configure" {
   & cmake.exe -S $PSScriptRoot -B $buildDirectory -G Ninja -DCMAKE_BUILD_TYPE=Release "-DwindowFixesBuildCommit=$buildCommit" "-Dgame=$game"

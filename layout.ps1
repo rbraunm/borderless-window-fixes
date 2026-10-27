@@ -77,6 +77,23 @@ function Copy-ReleaseFiles {
   return "version.dll, tools $($tools -join ', ')"
 }
 
+function Get-ReleaseFingerprint {
+  # The SHA-256 of the release's files by name: the same files give the same fingerprint, whatever the zip's timestamps.
+  param([string]$game)
+  $binaryFolder = Join-Path (Join-Path (Join-Path $repositoryFolder "build") $game) "bin"
+  $lines = @()
+  foreach ($fileName in @("version.dll") + @(Get-ShippedTools $game)) {
+    $path = Join-Path $binaryFolder $fileName
+    if (-not (Test-Path -LiteralPath $path)) {
+      throw "$path is missing; run build.ps1 first"
+    }
+    $lines += $fileName + " " + (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant()
+  }
+  $bytes = [System.Text.Encoding]::ASCII.GetBytes(($lines -join "`n"))
+  $hasher = New-Object System.Security.Cryptography.SHA256Managed
+  return ([System.BitConverter]::ToString($hasher.ComputeHash($bytes)) -replace "-", "").ToLowerInvariant()
+}
+
 function Add-DiagnosticTools {
   param([string]$game, [string]$clientFolder)
   $binaryFolder = Join-Path (Join-Path (Join-Path $repositoryFolder "build") $game) "bin"

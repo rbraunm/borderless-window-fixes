@@ -43,7 +43,7 @@ add_library(minhook STATIC
   "${minhookDirectory}/src/trampoline.c"
   "${minhookDirectory}/src/hde/hde64.c")
 target_include_directories(minhook PUBLIC "${minhookDirectory}/include" PRIVATE "${minhookDirectory}/src")
-target_compile_options(minhook PRIVATE /O2 /Gy)
+target_compile_options(minhook PRIVATE /O2 /Gy /Brepro)
 
 file(GLOB sharedSources CONFIGURE_DEPENDS "${nativeDirectory}/shared/source/*.cpp")
 
@@ -76,11 +76,12 @@ function(addToolLibrary toolName outputName toolFolder)
   set_target_properties(${toolName} PROPERTIES OUTPUT_NAME ${outputName})
   target_include_directories(${toolName} PRIVATE "${nativeDirectory}/shared/source")
   target_link_libraries(${toolName} PRIVATE minhook)
-  target_link_options(${toolName} PRIVATE /OPT:REF /OPT:ICF)
+  # /Brepro leaves no timestamps, so the same source builds the same bytes and a release only moves when its code does.
+  target_link_options(${toolName} PRIVATE /OPT:REF /OPT:ICF /Brepro)
   # MSVC deprecates the bounded C string functions the code uses in favor of its _s variants.
   target_compile_definitions(${toolName} PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _HAS_EXCEPTIONS=0 _CRT_SECURE_NO_WARNINGS
     "windowFixesBuildCommit=\"${windowFixesBuildCommit}\"")
-  target_compile_options(${toolName} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /WX /EHs-c- /GR- /Gy /utf-8 /O2>)
+  target_compile_options(${toolName} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /WX /EHs-c- /GR- /Gy /utf-8 /O2 /Brepro>)
   file(GLOB settingsFiles CONFIGURE_DEPENDS "${toolFolder}/*.cfg")
   embedDefaultFiles(${toolName} ${settingsFiles} ${tool_SETTINGS})
 endfunction()

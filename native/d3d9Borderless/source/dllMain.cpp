@@ -1,0 +1,310 @@
+#include "fatalError.h"
+#include "hookRegistry.h"
+#include "sessionLog.h"
+#include "settingsFile.h"
+#include "toolHost.h"
+
+#include <windows.h>
+#include <d3d9.h>
+#include <winternl.h>
+
+#include <string>
+
+#ifndef windowFixesBuildCommit
+#error "windowFixesBuildCommit must be defined by the build (see build.ps1)"
+#endif
+
+struct DllNotificationData {
+  ULONG flags;
+  const UNICODE_STRING* fullDllName;
+  const UNICODE_STRING* baseDllName;
+  PVOID dllBase;
+  ULONG sizeOfImage;
+};
+
+typedef VOID (CALLBACK* DllNotificationFunction)(ULONG reason, const DllNotificationData* data, PVOID context);
+typedef NTSTATUS (NTAPI* LdrRegisterDllNotificationFunction)(ULONG, DllNotificationFunction, PVOID, PVOID*);
+typedef IDirect3D9* (WINAPI* Direct3DCreate9Function)(UINT);
+typedef UINT (STDMETHODCALLTYPE* GetAdapterModeCountFunction)(IDirect3D9*, UINT, D3DFORMAT);
+typedef HRESULT (STDMETHODCALLTYPE* EnumAdapterModesFunction)(IDirect3D9*, UINT, D3DFORMAT, UINT, D3DDISPLAYMODE*);
+typedef HRESULT (STDMETHODCALLTYPE* CreateDeviceFunction)(IDirect3D9*, UINT, D3DDEVTYPE, HWND, DWORD,
+  D3DPRESENT_PARAMETERS*, IDirect3DDevice9**);
+typedef HRESULT (STDMETHODCALLTYPE* ResetFunction)(IDirect3DDevice9*, D3DPRESENT_PARAMETERS*);
+typedef HRESULT (STDMETHODCALLTYPE* PresentFunction)(IDirect3DDevice9*, const RECT*, const RECT*, HWND, const RGNDATA*);
+
+static const char* const toolName = "d3d9Borderless";
+static const char* const d3d9BorderlessVersion = "0.3.0";
+static const char* const configurationFileName = "d3d9Borderless.cfg";
+static const ULONG dllLoadedReason = 1;
+// Positions in the COM interfaces' method tables, from d3d9.h's declaration order.
+static const size_t getAdapterModeCountIndex = 6;
+static const size_t enumAdapterModesIndex = 7;
+static const size_t createDeviceIndex = 16;
+static const size_t resetIndex = 16;
+static const size_t presentIndex = 17;
+// The waitable timer sleeps to within about a millisecond; the rest of the wait spins.
+static const LONGLONG spinMicroseconds = 1500;
+
+static bool isLoaded = false;
+static volatile LONG isD3d9Hooked = 0;
+static volatile LONG isInterfaceHooked = 0;
+static volatile LONG isDeviceHooked = 0;
+static Direct3DCreate9Function originalDirect3DCreate9 = nullptr;
+static GetAdapterModeCountFunction originalGetAdapterModeCount = nullptr;
+static EnumAdapterModesFunction originalEnumAdapterModes = nullptr;
+static CreateDeviceFunction originalCreateDevice = nullptr;
+static ResetFunction originalReset = nullptr;
+static PresentFunction originalPresent = nullptr;
+static unsigned long frameRateLimit = 0;
+// frameRateLimit=auto: the device window's monitor refresh rate, known once the device exists.
+static bool isFrameRateAuto = false;
+static LONGLONG counterFrequency = 0;
+static LONGLONG framePeriod = 0;
+static LONGLONG nextFrame = 0;
+static HANDLE frameTimer = nullptr;
+
+static void* methodOf(void* object, size_t index) {
+  return (*reinterpret_cast<void***>(object))[index];
+}
+
+static MONITORINFOEXA monitorOf(HWND window) {
+  MONITORINFOEXA info = {};
+  info.cbSize = sizeof(info);
+  if (!GetMonitorInfoA(MonitorFromWindow(window, MONITOR_DEFAULTTOPRIMARY), &info)) {
+    fatalError("GetMonitorInfo failed (error %lu)", GetLastError());
+  }
+  return info;
+}
+
+static DEVMODEA desktopModeOf(const MONITORINFOEXA& monitor) {
+  DEVMODEA mode = {};
+  mode.dmSize = sizeof(mode);
+  if (!EnumDisplaySettingsA(monitor.szDevice, ENUM_CURRENT_SETTINGS, &mode)) {
+    fatalError("EnumDisplaySettings failed for %s", monitor.szDevice);
+  }
+  return mode;
+}
+
+// The game's resolution list offers only the desktop mode of the adapter's monitor, in every format it asks about.
+static UINT STDMETHODCALLTYPE getAdapterModeCountDetour(IDirect3D9* direct3d, UINT adapter, D3DFORMAT format) {
+  const UINT realCount = originalGetAdapterModeCount(direct3d, adapter, format);
+  return realCount == 0 ? 0 : 1;
+}
+
+static HRESULT STDMETHODCALLTYPE enumAdapterModesDetour(IDirect3D9* direct3d, UINT adapter, D3DFORMAT format, UINT modeIndex,
+    D3DDISPLAYMODE* mode) {
+  if (modeIndex != 0 || mode == nullptr) {
+    return D3DERR_INVALIDCALL;
+  }
+  MONITORINFOEXA adapterMonitor = {};
+  adapterMonitor.cbSize = sizeof(adapterMonitor);
+  if (!GetMonitorInfoA(direct3d->GetAdapterMonitor(adapter), &adapterMonitor)) {
+    fatalError("GetMonitorInfo failed for adapter %u (error %lu)", adapter, GetLastError());
+  }
+  const DEVMODEA desktop = desktopModeOf(adapterMonitor);
+  mode->Width = desktop.dmPelsWidth;
+  mode->Height = desktop.dmPelsHeight;
+  mode->RefreshRate = desktop.dmDisplayFrequency;
+  mode->Format = format;
+  return D3D_OK;
+}
+
+// A borderless window over the whole monitor; borderlessFit, when listed, sizes one that matches the monitor exactly.
+static void makeBorderless(HWND window, const char* reason) {
+  const MONITORINFOEXA monitor = monitorOf(window);
+  const RECT& bounds = monitor.rcMonitor;
+  SetWindowLongPtrA(window, GWL_EXSTYLE, GetWindowLongPtrA(window, GWL_EXSTYLE) & ~static_cast<LONG_PTR>(WS_EX_TOPMOST));
+  // Showing the window stays the game's call: shown before its first frame, it flashes empty.
+  const LONG_PTR visible = GetWindowLongPtrA(window, GWL_STYLE) & WS_VISIBLE;
+  SetWindowLongPtrA(window, GWL_STYLE, WS_POPUP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | visible);
+  if (!SetWindowPos(window, HWND_NOTOPMOST, bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top,
+      SWP_FRAMECHANGED | SWP_NOACTIVATE)) {
+    fatalError("SetWindowPos failed for the game window (error %lu)", GetLastError());
+  }
+  writeLogLine("INFO", "windowBorderless reason=%s window=%p monitor=%s left=%ld top=%ld width=%ld height=%ld", reason,
+    static_cast<void*>(window), monitor.szDevice, bounds.left, bounds.top, bounds.right - bounds.left,
+    bounds.bottom - bounds.top);
+}
+
+static void forceWindowed(const char* reason, D3DPRESENT_PARAMETERS* parameters) {
+  writeLogLine("INFO", "presentAsked reason=%s windowed=%d width=%u height=%u refreshRate=%u format=%d interval=0x%X window=%p",
+    reason, parameters->Windowed, parameters->BackBufferWidth, parameters->BackBufferHeight,
+    parameters->FullScreen_RefreshRateInHz, static_cast<int>(parameters->BackBufferFormat),
+    parameters->PresentationInterval, static_cast<void*>(parameters->hDeviceWindow));
+  parameters->Windowed = TRUE;
+  parameters->FullScreen_RefreshRateInHz = 0;
+}
+
+static LONGLONG counterNow() {
+  LARGE_INTEGER now;
+  QueryPerformanceCounter(&now);
+  return now.QuadPart;
+}
+
+// Holds frames to frameRateLimit per second: each frame waits for its slot, and a frame that is already late starts
+// the schedule over instead of rushing to catch up.
+static void waitForFrameSlot() {
+  LONGLONG now = counterNow();
+  if (nextFrame == 0 || now - nextFrame > framePeriod) {
+    nextFrame = now + framePeriod;
+    return;
+  }
+  const LONGLONG spinTicks = spinMicroseconds * counterFrequency / 1000000;
+  if (nextFrame - now > spinTicks) {
+    LARGE_INTEGER dueTime;
+    dueTime.QuadPart = -((nextFrame - now - spinTicks) * 10000000 / counterFrequency);
+    if (!SetWaitableTimer(frameTimer, &dueTime, 0, nullptr, nullptr, FALSE) ||
+        WaitForSingleObject(frameTimer, INFINITE) != WAIT_OBJECT_0) {
+      fatalError("The frame timer failed (error %lu)", GetLastError());
+    }
+  }
+  while (counterNow() < nextFrame) {
+    YieldProcessor();
+  }
+  nextFrame += framePeriod;
+}
+
+static HRESULT STDMETHODCALLTYPE presentDetour(IDirect3DDevice9* device, const RECT* source, const RECT* destination,
+    HWND window, const RGNDATA* dirtyRegion) {
+  waitForFrameSlot();
+  return originalPresent(device, source, destination, window, dirtyRegion);
+}
+
+static HRESULT STDMETHODCALLTYPE resetDetour(IDirect3DDevice9* device, D3DPRESENT_PARAMETERS* parameters) {
+  forceWindowed("reset", parameters);
+  const HRESULT result = originalReset(device, parameters);
+  writeLogLine("INFO", "deviceReset result=0x%08lX", static_cast<unsigned long>(result));
+  D3DDEVICE_CREATION_PARAMETERS creation = {};
+  if (SUCCEEDED(result) && SUCCEEDED(device->GetCreationParameters(&creation))) {
+    makeBorderless(parameters->hDeviceWindow != nullptr ? parameters->hDeviceWindow : creation.hFocusWindow, "reset");
+  }
+  return result;
+}
+
+static HRESULT STDMETHODCALLTYPE createDeviceDetour(IDirect3D9* direct3d, UINT adapter, D3DDEVTYPE deviceType,
+    HWND focusWindow, DWORD behaviorFlags, D3DPRESENT_PARAMETERS* parameters, IDirect3DDevice9** device) {
+  forceWindowed("create", parameters);
+  const HRESULT result = originalCreateDevice(direct3d, adapter, deviceType, focusWindow, behaviorFlags, parameters, device);
+  writeLogLine("INFO", "deviceCreated result=0x%08lX adapter=%u", static_cast<unsigned long>(result), adapter);
+  if (FAILED(result)) {
+    return result;
+  }
+  HWND deviceWindow = parameters->hDeviceWindow != nullptr ? parameters->hDeviceWindow : focusWindow;
+  if (isFrameRateAuto && frameRateLimit == 0) {
+    frameRateLimit = desktopModeOf(monitorOf(deviceWindow)).dmDisplayFrequency;
+    framePeriod = counterFrequency / frameRateLimit;
+    writeLogLine("INFO", "frameRateLimitChosen source=refreshRate framesPerSecond=%lu", frameRateLimit);
+  }
+  if (InterlockedExchange(&isDeviceHooked, 1) == 0) {
+    installHook("IDirect3DDevice9::Reset", methodOf(*device, resetIndex), reinterpret_cast<void*>(&resetDetour),
+      reinterpret_cast<void**>(&originalReset));
+    if (frameRateLimit != 0) {
+      installHook("IDirect3DDevice9::Present", methodOf(*device, presentIndex), reinterpret_cast<void*>(&presentDetour),
+        reinterpret_cast<void**>(&originalPresent));
+    }
+  }
+  makeBorderless(deviceWindow, "create");
+  return result;
+}
+
+// Every IDirect3D9 shares one method table, so the first object's methods cover all of them.
+static IDirect3D9* WINAPI direct3DCreate9Detour(UINT sdkVersion) {
+  IDirect3D9* direct3d = originalDirect3DCreate9(sdkVersion);
+  if (direct3d != nullptr && InterlockedExchange(&isInterfaceHooked, 1) == 0) {
+    installHook("IDirect3D9::GetAdapterModeCount", methodOf(direct3d, getAdapterModeCountIndex),
+      reinterpret_cast<void*>(&getAdapterModeCountDetour), reinterpret_cast<void**>(&originalGetAdapterModeCount));
+    installHook("IDirect3D9::EnumAdapterModes", methodOf(direct3d, enumAdapterModesIndex),
+      reinterpret_cast<void*>(&enumAdapterModesDetour), reinterpret_cast<void**>(&originalEnumAdapterModes));
+    installHook("IDirect3D9::CreateDevice", methodOf(direct3d, createDeviceIndex), reinterpret_cast<void*>(&createDeviceDetour),
+      reinterpret_cast<void**>(&originalCreateDevice));
+  }
+  return direct3d;
+}
+
+static void hookD3d9() {
+  if (InterlockedExchange(&isD3d9Hooked, 1) != 0) {
+    return;
+  }
+  installExportHook("d3d9.dll", "Direct3DCreate9", reinterpret_cast<void*>(&direct3DCreate9Detour),
+    reinterpret_cast<void**>(&originalDirect3DCreate9));
+}
+
+static VOID CALLBACK onDllNotification(ULONG reason, const DllNotificationData* data, PVOID context) {
+  (void)context;
+  if (reason == dllLoadedReason && data->baseDllName != nullptr &&
+      _wcsnicmp(data->baseDllName->Buffer, L"d3d9.dll", data->baseDllName->Length / sizeof(wchar_t)) == 0 &&
+      data->baseDllName->Length == wcslen(L"d3d9.dll") * sizeof(wchar_t)) {
+    hookD3d9();
+  }
+}
+
+extern "C" {
+
+// Turns a Direct3D 9 game's exclusive fullscreen into a borderless window at the desktop's own mode: the device is
+// created windowed, the game's window covers its monitor, and the game's resolution list holds only the desktop mode,
+// so focus changes never switch the display mode or minimize the game. frameRateLimit, when set, holds the frame rate
+// down at Present. Every failure is fatal.
+__declspec(dllexport) DWORD Load(const ToolHost* host) {
+  if (isLoaded) {
+    fatalError("Load was called twice");
+  }
+  isLoaded = true;
+
+  setFatalErrorTitle(toolName);
+  openSessionLog(host->toolDirectory, toolName, host->sessionStamp);
+  writeLogLine("INFO", "sessionStart version=%s buildCommit=%s mainThreadID=%lu", d3d9BorderlessVersion,
+    windowFixesBuildCommit, GetCurrentThreadId());
+  std::string limitText;
+  const SettingDefinition definitions[] = {
+    { "frameRateLimit", SettingKind::text, &limitText, false },
+  };
+  loadSettingsFile(host->toolDirectory, configurationFileName, definitions, sizeof(definitions) / sizeof(definitions[0]));
+  if (limitText == "auto") {
+    isFrameRateAuto = true;
+  } else if (limitText.find_first_not_of("0123456789") == std::string::npos && limitText.size() <= 4) {
+    frameRateLimit = strtoul(limitText.c_str(), nullptr, 10);
+  } else {
+    fatalError("%s: frameRateLimit must be auto, 0 or a number of frames per second, not %s", configurationFileName,
+      limitText.c_str());
+  }
+  writeLogLine("INFO", "configurationLoaded frameRateLimit=%s", limitText.c_str());
+  if (isFrameRateAuto || frameRateLimit != 0) {
+    LARGE_INTEGER frequency;
+    QueryPerformanceFrequency(&frequency);
+    counterFrequency = frequency.QuadPart;
+    framePeriod = frameRateLimit != 0 ? counterFrequency / frameRateLimit : 0;
+    frameTimer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+    if (frameTimer == nullptr) {
+      fatalError("Could not create a high resolution timer (error %lu)", GetLastError());
+    }
+  }
+  initializeHookRegistry();
+  HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+  LdrRegisterDllNotificationFunction ldrRegisterDllNotification = ntdll == nullptr ? nullptr :
+    reinterpret_cast<LdrRegisterDllNotificationFunction>(GetProcAddress(ntdll, "LdrRegisterDllNotification"));
+  if (ldrRegisterDllNotification == nullptr) {
+    fatalError("ntdll.dll does not export LdrRegisterDllNotification");
+  }
+  PVOID cookie = nullptr;
+  const NTSTATUS status = ldrRegisterDllNotification(0, &onDllNotification, nullptr, &cookie);
+  if (status < 0) {
+    fatalError("LdrRegisterDllNotification failed (status 0x%08lX)", static_cast<unsigned long>(status));
+  }
+  if (GetModuleHandleA("d3d9.dll") != nullptr) {
+    hookD3d9();
+  } else {
+    writeLogLine("INFO", "waitingForD3d9");
+  }
+  writeLogLine("INFO", "loadComplete");
+  return 0;
+}
+
+BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
+  (void)reserved;
+  if (reason == DLL_PROCESS_ATTACH) {
+    DisableThreadLibraryCalls(instance);
+  }
+  return TRUE;
+}
+
+}

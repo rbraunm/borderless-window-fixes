@@ -1,6 +1,6 @@
 // The game imports VERSION.dll, and Windows looks for it in the game directory first, so this DLL is
-// loaded as version.dll. Every export the real one has is reproduced (versionStubs.asm) as a jump
-// through a pointer to the system copy.
+// loaded as version.dll. Every export the real one has is reproduced (versionStubs.asm on x64, below on x86) as a
+// jump through a pointer to the system copy.
 #include "versionProxy.h"
 
 #include "fatalError.h"
@@ -8,26 +8,6 @@
 #include <windows.h>
 
 #include <string>
-
-// X(exportName) for every export of the system version.dll.
-#define versionExports(X) \
-  X(GetFileVersionInfoA) \
-  X(GetFileVersionInfoByHandle) \
-  X(GetFileVersionInfoExA) \
-  X(GetFileVersionInfoExW) \
-  X(GetFileVersionInfoSizeA) \
-  X(GetFileVersionInfoSizeExA) \
-  X(GetFileVersionInfoSizeExW) \
-  X(GetFileVersionInfoSizeW) \
-  X(GetFileVersionInfoW) \
-  X(VerFindFileA) \
-  X(VerFindFileW) \
-  X(VerInstallFileA) \
-  X(VerInstallFileW) \
-  X(VerLanguageNameA) \
-  X(VerLanguageNameW) \
-  X(VerQueryValueA) \
-  X(VerQueryValueW)
 
 // An export the system copy does not have (Wine omits some) resolves to this,
 // so calling it fails loudly instead of jumping to address zero.
@@ -37,12 +17,20 @@
   }
 versionExports(declareMissingExport)
 
-// The pointers versionStubs.asm jumps through.
+// The pointers the stubs jump through.
 #define declarePointer(exportName) \
   void* real##exportName = reinterpret_cast<void*>(&missing##exportName);
 extern "C" {
 versionExports(declarePointer)
 }
+
+#if defined(_M_IX86)
+#define declareStub(exportName) \
+  extern "C" __declspec(naked) void proxy##exportName() { \
+    __asm { jmp dword ptr [real##exportName] } \
+  }
+versionExports(declareStub)
+#endif
 
 void loadSystemVersionLibrary() {
   char systemDirectory[MAX_PATH];

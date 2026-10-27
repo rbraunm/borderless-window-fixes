@@ -1,5 +1,5 @@
-# Every game under games builds and tests on each pull request to main; on main, each gets a GitHub release of its
-# zip, named for the day and the commit built.
+# Every game under games builds on each pull request to main; on main, each game whose release files changed gets a
+# GitHub release of its zip, named for the day and the commit built.
 name: release
 
 on:
@@ -15,6 +15,7 @@ on:
       - build.ps1
       - layout.ps1
       - package.ps1
+      - release.ps1
       - .github/workflows/release.yml
 
 permissions:
@@ -43,35 +44,14 @@ jobs:
           python -m venv .venv || exit /b 1
           .venv\Scripts\python.exe -m pip install -e .
 
-      - name: Build, test and package every game
+      # Releases only the games whose DLLs changed since their last release (release.ps1); a pull request reports which.
+      - name: Release changed games
         shell: cmd
-        run: |
-          mkdir releases || exit /b 1
-          for /d %%g in (games\*) do (
-            powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1 -game %%~nxg -test || exit /b 1
-            powershell -NoProfile -ExecutionPolicy Bypass -File package.ps1 -game %%~nxg -outputPath releases\borderless-window-fixes-%%~nxg.zip || exit /b 1
-          )
-
-      - name: Publish each game's release
-        if: github.event_name == 'push'
-        shell: powershell
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $ErrorActionPreference = "Stop"
-          $stamp = (Get-Date).ToUniversalTime().ToString("yyyy.MM.dd")
-          $commit = $env:GITHUB_SHA.Substring(0, 7)
-          foreach ($gameFolder in Get-ChildItem -Directory games) {
-            $game = $gameFolder.Name
-            $notes = @(Get-Content -Encoding UTF8 (Join-Path $gameFolder.FullName "release.md"))
-            if ($notes[0] -notmatch '^# (.+)$') {
-              throw "games\$game\release.md must start with a # title"
-            }
-            $title = "$($Matches[1]) $stamp ($commit)"
-            $notesPath = Join-Path $env:RUNNER_TEMP "$game-notes.md"
-            [System.IO.File]::WriteAllText($notesPath, (($notes | Select-Object -Skip 1) -join "`n"))
-            gh release create "$game-$stamp-$commit" "releases\borderless-window-fixes-$game.zip" --target $env:GITHUB_SHA --title $title --notes-file $notesPath
-            if ($LASTEXITCODE -ne 0) {
-              throw "gh release create failed for $game"
-            }
-          }
+          if "${{ github.event_name }}"=="push" (
+            powershell -NoProfile -ExecutionPolicy Bypass -File release.ps1 -test -publish
+          ) else (
+            powershell -NoProfile -ExecutionPolicy Bypass -File release.ps1 -test
+          )

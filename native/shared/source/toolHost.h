@@ -17,9 +17,12 @@ struct ToolHost {
   const char* sessionStamp;
   DWORD mainThreadID;
   // Runs callback on the game's main thread each time it pumps window messages (PeekMessage,
-  // GetMessage); nullptr stops it. Clearing returns once a run in progress has returned. One
-  // callback at a time.
-  void (*setPumpCallback)(void (*callback)());
+  // GetMessage), along with every other tool's. Adding one already added, or more than the loader
+  // holds, is fatal.
+  void (*addPumpCallback)(void (*callback)());
+  // Stops a callback added before, returning once a run in progress has returned; one not added is
+  // fatal.
+  void (*removePumpCallback)(void (*callback)());
 };
 
 typedef DWORD (*ToolLoadFunction)(const ToolHost* host);

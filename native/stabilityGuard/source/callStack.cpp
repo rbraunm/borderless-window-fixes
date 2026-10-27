@@ -8,6 +8,7 @@
 static const size_t frameWalkLimit = 48;
 static const uintptr_t frameSpanLimit = 1024 * 1024;
 
+#if defined(_M_X64)
 void writeRegisters(const char* eventPrefix, const CONTEXT* context) {
   writeLogLine("INFO", "%sRegisters rax=0x%016llX rbx=0x%016llX rcx=0x%016llX rdx=0x%016llX rsi=0x%016llX rdi=0x%016llX "
     "rbp=0x%016llX rsp=0x%016llX r8=0x%016llX r9=0x%016llX r10=0x%016llX r11=0x%016llX r12=0x%016llX r13=0x%016llX "
@@ -15,6 +16,14 @@ void writeRegisters(const char* eventPrefix, const CONTEXT* context) {
     context->Rax, context->Rbx, context->Rcx, context->Rdx, context->Rsi, context->Rdi, context->Rbp, context->Rsp,
     context->R8, context->R9, context->R10, context->R11, context->R12, context->R13, context->R14, context->R15,
     context->Rip, context->EFlags);
+}
+
+uintptr_t contextStackPointer(const CONTEXT* context) {
+  return static_cast<uintptr_t>(context->Rsp);
+}
+
+uintptr_t contextInstructionPointer(const CONTEXT* context) {
+  return static_cast<uintptr_t>(context->Rip);
 }
 
 // One unwind step. The unwinder reads the stack the context describes, which a crashed thread may have
@@ -40,15 +49,44 @@ static bool unwindFrame(CONTEXT* frame) {
     return false;
   }
 }
+#elif defined(_M_IX86)
+void writeRegisters(const char* eventPrefix, const CONTEXT* context) {
+  writeLogLine("INFO", "%sRegisters eax=0x%08lX ebx=0x%08lX ecx=0x%08lX edx=0x%08lX esi=0x%08lX edi=0x%08lX ebp=0x%08lX "
+    "esp=0x%08lX eip=0x%08lX eflags=0x%08lX", eventPrefix, context->Eax, context->Ebx, context->Ecx, context->Edx,
+    context->Esi, context->Edi, context->Ebp, context->Esp, context->Eip, context->EFlags);
+}
+
+uintptr_t contextStackPointer(const CONTEXT* context) {
+  return static_cast<uintptr_t>(context->Esp);
+}
+
+uintptr_t contextInstructionPointer(const CONTEXT* context) {
+  return static_cast<uintptr_t>(context->Eip);
+}
+
+// One step along the frame-pointer chain: [ebp] holds the caller's ebp and [ebp+4] the return address. Code built
+// without frame pointers breaks the chain, which the stack candidates cover.
+static bool unwindFrame(CONTEXT* frame) {
+  const uintptr_t framePointer = static_cast<uintptr_t>(frame->Ebp);
+  if (framePointer == 0 || !isReadable(framePointer, 2 * sizeof(DWORD))) {
+    return false;
+  }
+  const DWORD* slots = reinterpret_cast<const DWORD*>(framePointer);
+  frame->Ebp = slots[0];
+  frame->Eip = slots[1];
+  frame->Esp = static_cast<DWORD>(framePointer + 2 * sizeof(DWORD));
+  return true;
+}
+#endif
 
 void writeFrameWalk(const char* eventPrefix, const CONTEXT* context) {
   CONTEXT frame = *context;
   for (size_t frameIndex = 0; frameIndex < frameWalkLimit; frameIndex++) {
-    const DWORD64 previousStack = frame.Rsp;
+    const uintptr_t previousStack = contextStackPointer(&frame);
     if (!unwindFrame(&frame)) {
       break;
     }
-    const uintptr_t returnAddress = static_cast<uintptr_t>(frame.Rip);
+    const uintptr_t returnAddress = contextInstructionPointer(&frame);
     if (returnAddress == 0 || !isExecutable(returnAddress)) {
       break;
     }
@@ -56,7 +94,7 @@ void writeFrameWalk(const char* eventPrefix, const CONTEXT* context) {
     describeAddress(returnAddress, location, sizeof(location));
     writeLogLine("INFO", "%sFrame index=%u returnAddress=0x%016llX location=%s", eventPrefix,
       static_cast<unsigned>(frameIndex), static_cast<unsigned long long>(returnAddress), location);
-    if (frame.Rsp <= previousStack || frame.Rsp - previousStack > frameSpanLimit) {
+    if (contextStackPointer(&frame) <= previousStack || contextStackPointer(&frame) - previousStack > frameSpanLimit) {
       break;
     }
   }

@@ -56,7 +56,7 @@ void writeMainThreadState(unsigned long freezeNumber) {
   if (SuspendThread(mainThread) != static_cast<DWORD>(-1)) {
     isCaptured = GetThreadContext(mainThread, &context) != FALSE;
     if (isCaptured) {
-      slotCount = copyStackSlots(static_cast<uintptr_t>(context.Rsp), slots, settings.stackScanSlots);
+      slotCount = copyStackSlots(contextStackPointer(&context), slots, settings.stackScanSlots);
     }
     ResumeThread(mainThread);
   }
@@ -67,8 +67,9 @@ void writeMainThreadState(unsigned long freezeNumber) {
     return;
   }
   char location[MAX_PATH + 32];
-  describeAddress(static_cast<uintptr_t>(context.Rip), location, sizeof(location));
-  writeLogLine("INFO", "freezeMainThread number=%lu rip=0x%016llX location=%s", freezeNumber, context.Rip, location);
+  describeAddress(contextInstructionPointer(&context), location, sizeof(location));
+  writeLogLine("INFO", "freezeMainThread number=%lu address=0x%016llX location=%s", freezeNumber,
+    static_cast<unsigned long long>(contextInstructionPointer(&context)), location);
   writeRegisters("freeze", &context);
   writeFrameWalk("freeze", &context);
   writeStackCandidates("freeze", slots, slotCount);

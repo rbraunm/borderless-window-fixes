@@ -1,6 +1,7 @@
 #include "entryPointHook.h"
 #include "fatalError.h"
 #include "hookRegistry.h"
+#include "lateStart.h"
 #include "linePipe.h"
 #include "modulePath.h"
 #include "pumpHooks.h"
@@ -28,6 +29,8 @@ static HMODULE loaderModule = nullptr;
 // Names this game session in every tool's log file; tools reloaded later keep using it.
 static char sessionStamp[32];
 static LinePipeServer commandPipe;
+// Loaded by LoadLibrary after the entry point ran, as a packed executable does while it unpacks.
+static bool isLateStart = false;
 
 static void requireDirectory(const std::string& path, const char* description) {
   const DWORD attributes = GetFileAttributesA(path.c_str());
@@ -43,7 +46,7 @@ static void logExecutable() {
     fatalError("Could not resolve the game executable path (error %lu)", GetLastError());
   }
   const BYTE* executableBase = reinterpret_cast<const BYTE*>(GetModuleHandleA(nullptr));
-  const IMAGE_NT_HEADERS64* headers = reinterpret_cast<const IMAGE_NT_HEADERS64*>(
+  const IMAGE_NT_HEADERS* headers = reinterpret_cast<const IMAGE_NT_HEADERS*>(
     executableBase + reinterpret_cast<const IMAGE_DOS_HEADER*>(executableBase)->e_lfanew);
   // Not the command line: a launcher may put a login ticket on it.
   writeLogLine("INFO", "sessionStart version=%s buildCommit=%s mainThreadID=%lu executable=%s timeDateStamp=0x%08lX "
@@ -51,7 +54,8 @@ static void logExecutable() {
     headers->FileHeader.TimeDateStamp, headers->OptionalHeader.SizeOfImage, static_cast<const void*>(executableBase));
 }
 
-// Runs on the main thread at the game's entry point, outside the loader lock.
+// Runs on the main thread outside the loader lock: at the game's entry point, or after a late load at the unpacked
+// game's first startup call.
 static void runLoader() {
   const std::string clientFolder = resolveModuleDirectory(loaderModule);
   const std::string toolsDirectory = clientFolder + "\\" + toolsFolderName;
@@ -62,12 +66,40 @@ static void runLoader() {
     now.wMinute, now.wSecond);
   openSessionLog(toolsDirectory, toolName, sessionStamp);
   logExecutable();
-  initializeHookRegistry();
+  if (isLateStart) {
+    writeLogLine("INFO", "startMode mode=late trigger=%s", lateStartTrigger());
+  } else {
+    writeLogLine("INFO", "startMode mode=entryPoint");
+    initializeHookRegistry();
+  }
   installPumpHooks(GetCurrentThreadId());
-  const ToolHost host = { toolsDirectory.c_str(), sessionStamp, GetCurrentThreadId(), &setPumpCallback };
+  const ToolHost host = { toolsDirectory.c_str(), sessionStamp, GetCurrentThreadId(), &addPumpCallback,
+    &removePumpCallback };
   loadListedTools(host);
   commandPipe.startForProcess(toolName, &runLoaderCommand);
   writeLogLine("INFO", "loadComplete");
+}
+
+// Every program in the game's folder that imports version.dll loads this copy: only the game's executable and its
+// companions (game.cfg) get the tools.
+static bool isGameExecutable() {
+  char executablePath[MAX_PATH];
+  const DWORD executablePathLength = GetModuleFileNameA(nullptr, executablePath, sizeof(executablePath));
+  if (executablePathLength == 0 || executablePathLength >= sizeof(executablePath)) {
+    fatalError("Could not resolve the executable path (error %lu)", GetLastError());
+  }
+  const char* executableName = strrchr(executablePath, '\\');
+  executableName = executableName != nullptr ? executableName + 1 : executablePath;
+  const char* candidate = windowFixesGameExecutables;
+  while (*candidate != '\0') {
+    const char* separator = strchr(candidate, '|');
+    const size_t length = separator != nullptr ? static_cast<size_t>(separator - candidate) : strlen(candidate);
+    if (strlen(executableName) == length && _strnicmp(executableName, candidate, length) == 0) {
+      return true;
+    }
+    candidate += separator != nullptr ? length + 1 : length;
+  }
+  return false;
 }
 
 extern "C" BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
@@ -76,12 +108,18 @@ extern "C" BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved
     loaderModule = instance;
     DisableThreadLibraryCalls(instance);
     loadSystemVersionLibrary();
-    // A null reserved pointer means LoadLibrary at runtime: the entry point has
-    // already run, so the tools could never be loaded.
-    if (reserved == nullptr) {
-      fatalError("fixLoader must be loaded at startup as the game's version.dll, not by LoadLibrary");
+    if (!isGameExecutable()) {
+      return TRUE;
     }
-    installEntryPointHook(&runLoader);
+    // A null reserved pointer means LoadLibrary at runtime: the entry point has already run, so the tools start at the
+    // unpacked game's first startup call instead.
+    if (reserved == nullptr) {
+      isLateStart = true;
+      initializeHookRegistry();
+      installLateStart(&runLoader);
+    } else {
+      installEntryPointHook(&runLoader);
+    }
   }
   return TRUE;
 }

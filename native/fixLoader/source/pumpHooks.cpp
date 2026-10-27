@@ -9,10 +9,12 @@ typedef BOOL(WINAPI* PeekMessageFunction)(LPMSG, HWND, UINT, UINT, UINT);
 typedef BOOL(WINAPI* GetMessageFunction)(LPMSG, HWND, UINT, UINT);
 
 DWORD gameMainThreadID = 0;
-// Held while the callback runs. A critical section, not a slim lock: the callback may run game code
+const size_t pumpCallbackCapacity = 16;
+// Held while the callbacks run. A critical section, not a slim lock: a callback may run game code
 // that pumps messages again on the same thread.
 CRITICAL_SECTION callbackLock;
-void (*pumpCallback)() = nullptr;
+void (*pumpCallbacks[pumpCallbackCapacity])() = {};
+size_t pumpCallbackCount = 0;
 PeekMessageFunction originalPeekMessageA = nullptr;
 PeekMessageFunction originalPeekMessageW = nullptr;
 GetMessageFunction originalGetMessageA = nullptr;
@@ -23,8 +25,8 @@ void runPumpCallback() {
     return;
   }
   EnterCriticalSection(&callbackLock);
-  if (pumpCallback != nullptr) {
-    pumpCallback();
+  for (size_t index = 0; index < pumpCallbackCount; index++) {
+    pumpCallbacks[index]();
   }
   LeaveCriticalSection(&callbackLock);
 }
@@ -60,14 +62,38 @@ void installPumpHooks(DWORD mainThreadID) {
   installExportHook("user32.dll", "GetMessageW", reinterpret_cast<void*>(&getMessageWDetour), reinterpret_cast<void**>(&originalGetMessageW));
 }
 
-void setPumpCallback(void (*callback)()) {
+void addPumpCallback(void (*callback)()) {
   EnterCriticalSection(&callbackLock);
-  const bool isTaken = callback != nullptr && pumpCallback != nullptr;
-  if (!isTaken) {
-    pumpCallback = callback;
+  bool isAdded = false;
+  for (size_t index = 0; index < pumpCallbackCount; index++) {
+    isAdded = isAdded || pumpCallbacks[index] == callback;
+  }
+  const bool isFull = pumpCallbackCount == pumpCallbackCapacity;
+  if (!isAdded && !isFull && callback != nullptr) {
+    pumpCallbacks[pumpCallbackCount++] = callback;
   }
   LeaveCriticalSection(&callbackLock);
-  if (isTaken) {
-    fatalError("A tool set the pump callback while another tool holds it");
+  if (callback == nullptr || isAdded || isFull) {
+    fatalError(callback == nullptr ? "A tool added a null pump callback" : isAdded ?
+      "A tool added a pump callback it had already added" : "More than 16 pump callbacks were added");
+  }
+}
+
+void removePumpCallback(void (*callback)()) {
+  EnterCriticalSection(&callbackLock);
+  bool isFound = false;
+  for (size_t index = 0; index < pumpCallbackCount; index++) {
+    if (isFound) {
+      pumpCallbacks[index - 1] = pumpCallbacks[index];
+    } else {
+      isFound = pumpCallbacks[index] == callback;
+    }
+  }
+  if (isFound) {
+    pumpCallbackCount--;
+  }
+  LeaveCriticalSection(&callbackLock);
+  if (!isFound) {
+    fatalError("A tool removed a pump callback it had not added");
   }
 }

@@ -96,11 +96,6 @@ target_link_libraries(stabilityGuard PRIVATE psapi)
 
 addToolLibrary(displayGuard displayGuard "${nativeDirectory}/displayGuard")
 
-set(nvapiDirectory "${nativeDirectory}/shared/vendor/nvapi")
-addToolLibrary(nvidiaProfile nvidiaProfile "${nativeDirectory}/nvidiaProfile")
-target_include_directories(nvidiaProfile PRIVATE "${nvapiDirectory}/include")
-target_link_libraries(nvidiaProfile PRIVATE "${nvapiDirectory}/lib/nvapi64.lib")
-
 # A game's own tools live in games/<game>/native/<tool>, built the same way.
 file(GLOB gameToolFolders LIST_DIRECTORIES true "${gameDirectory}/native/*")
 foreach(gameToolFolder IN LISTS gameToolFolders)

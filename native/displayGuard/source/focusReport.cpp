@@ -23,6 +23,9 @@ typedef HHOOK (WINAPI* SetWindowsHookExAFunction)(int, HOOKPROC, HINSTANCE, DWOR
 typedef BOOL (WINAPI* ShowWindowFunction)(HWND, int);
 typedef BOOL (WINAPI* SetForegroundWindowFunction)(HWND);
 typedef BOOL (WINAPI* SwapBuffersFunction)(HDC);
+// The system call every display mode change ends in, whoever asks; its arguments are not part of any public
+// header and differ between Windows versions, so they are passed through unread.
+typedef LONG (WINAPI* NtUserChangeDisplaySettingsFunction)(void*, void*, void*, void*, void*);
 
 // SDL2's public signatures; SDL_bool is an int-sized enum.
 struct SdlVersion {
@@ -61,6 +64,7 @@ SetWindowsHookExAFunction originalSetWindowsHookExA = nullptr;
 ShowWindowFunction originalShowWindow = nullptr;
 SetForegroundWindowFunction originalSetForegroundWindow = nullptr;
 SwapBuffersFunction originalSwapBuffers = nullptr;
+NtUserChangeDisplaySettingsFunction originalNtUserChangeDisplaySettings = nullptr;
 SdlGetHintFunction sdlGetHint = nullptr;
 SdlSetHintWithPriorityFunction originalSdlSetHintWithPriority = nullptr;
 SdlSetWindowGrabFunction originalSdlSetWindowGrab = nullptr;
@@ -357,6 +361,15 @@ BOOL WINAPI setForegroundWindowDetour(HWND window) {
   return result;
 }
 
+LONG WINAPI ntUserChangeDisplaySettingsDetour(void* first, void* second, void* third, void* fourth, void* fifth) {
+  void* const returnAddress = _ReturnAddress();
+  const LONG result = originalNtUserChangeDisplaySettings(first, second, third, fourth, fifth);
+  char caller[MAX_PATH + 32];
+  writeLogLine("INFO", "ntUserChangeDisplaySettings result=%ld threadID=%lu foreground=%s caller=%s", result, GetCurrentThreadId(),
+    isGameInForeground() ? "true" : "false", describeCaller(returnAddress, caller, sizeof(caller)));
+  return result;
+}
+
 void logSdlHints() {
   for (const char* name : reportedSdlHints) {
     const char* value = sdlGetHint(name);
@@ -522,6 +535,7 @@ void installFocusReporting(DWORD mainThreadID) {
   hookExport("user32.dll", "ShowWindow", &showWindowDetour, &originalShowWindow);
   hookExport("user32.dll", "SetForegroundWindow", &setForegroundWindowDetour, &originalSetForegroundWindow);
   hookExport("gdi32.dll", "SwapBuffers", &swapBuffersDetour, &originalSwapBuffers);
+  hookExport("win32u.dll", "NtUserChangeDisplaySettings", &ntUserChangeDisplaySettingsDetour, &originalNtUserChangeDisplaySettings);
   installSdlReporting();
   logCursorState("load");
 }

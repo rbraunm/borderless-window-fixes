@@ -2,6 +2,7 @@
 #include "focusReport.h"
 #include "fatalError.h"
 #include "hookRegistry.h"
+#include "monitorWatch.h"
 #include "sessionLog.h"
 #include "toolHost.h"
 #include "windowReport.h"
@@ -37,6 +38,7 @@ __declspec(dllexport) DWORD Load(const ToolHost* host) {
   writeDisplayReport();
   installWindowReporting(host->mainThreadID);
   installFocusReporting(host->mainThreadID);
+  startMonitorWatch();
   writeLogLine("INFO", "loadComplete");
   return 0;
 }

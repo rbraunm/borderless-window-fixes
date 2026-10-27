@@ -1,4 +1,5 @@
 #include "displayReport.h"
+#include "focusReport.h"
 #include "fatalError.h"
 #include "hookRegistry.h"
 #include "sessionLog.h"
@@ -35,6 +36,7 @@ __declspec(dllexport) DWORD Load(const ToolHost* host) {
   initializeHookRegistry();
   writeDisplayReport();
   installWindowReporting(host->mainThreadID);
+  installFocusReporting(host->mainThreadID);
   writeLogLine("INFO", "loadComplete");
   return 0;
 }

@@ -7,6 +7,7 @@
 
 #include <windows.h>
 
+#include <cstdio>
 #include <cstring>
 
 struct HookedTarget {
@@ -65,6 +66,17 @@ bool installHook(const char* targetName, void* target, void* detour, void** orig
   hookedTargetCount++;
   writeLogLine("INFO", "hookInstalled target=%s", targetName);
   return true;
+}
+
+bool installExportHook(const char* moduleName, const char* exportName, void* detour, void** original) {
+  const char* const dllSuffix = ".dll";
+  const size_t moduleNameLength = strlen(moduleName);
+  const size_t suffixLength = strlen(dllSuffix);
+  const size_t baseLength = moduleNameLength > suffixLength && _stricmp(moduleName + moduleNameLength - suffixLength, dllSuffix) == 0
+    ? moduleNameLength - suffixLength : moduleNameLength;
+  char targetName[128];
+  snprintf(targetName, sizeof(targetName), "%.*s!%s", static_cast<int>(baseLength), moduleName, exportName);
+  return installHook(targetName, resolveLoadedExport(moduleName, exportName), detour, original);
 }
 
 static void registerTarget(void* address, const char* name) {

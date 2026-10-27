@@ -3,8 +3,6 @@
 #include "fatalError.h"
 #include "hookRegistry.h"
 
-#include <string>
-
 namespace {
 
 typedef BOOL(WINAPI* PeekMessageFunction)(LPMSG, HWND, UINT, UINT, UINT);
@@ -51,20 +49,15 @@ BOOL WINAPI getMessageWDetour(LPMSG message, HWND window, UINT first, UINT last)
   return originalGetMessageW(message, window, first, last);
 }
 
-void hookUser32(const char* exportName, void* detour, void** original) {
-  const std::string targetName = std::string("user32!") + exportName;
-  installHook(targetName.c_str(), resolveLoadedExport("user32.dll", exportName), detour, original);
-}
-
 }
 
 void installPumpHooks(DWORD mainThreadID) {
   gameMainThreadID = mainThreadID;
   InitializeCriticalSection(&callbackLock);
-  hookUser32("PeekMessageA", reinterpret_cast<void*>(&peekMessageADetour), reinterpret_cast<void**>(&originalPeekMessageA));
-  hookUser32("PeekMessageW", reinterpret_cast<void*>(&peekMessageWDetour), reinterpret_cast<void**>(&originalPeekMessageW));
-  hookUser32("GetMessageA", reinterpret_cast<void*>(&getMessageADetour), reinterpret_cast<void**>(&originalGetMessageA));
-  hookUser32("GetMessageW", reinterpret_cast<void*>(&getMessageWDetour), reinterpret_cast<void**>(&originalGetMessageW));
+  installExportHook("user32.dll", "PeekMessageA", reinterpret_cast<void*>(&peekMessageADetour), reinterpret_cast<void**>(&originalPeekMessageA));
+  installExportHook("user32.dll", "PeekMessageW", reinterpret_cast<void*>(&peekMessageWDetour), reinterpret_cast<void**>(&originalPeekMessageW));
+  installExportHook("user32.dll", "GetMessageA", reinterpret_cast<void*>(&getMessageADetour), reinterpret_cast<void**>(&originalGetMessageA));
+  installExportHook("user32.dll", "GetMessageW", reinterpret_cast<void*>(&getMessageWDetour), reinterpret_cast<void**>(&originalGetMessageW));
 }
 
 void setPumpCallback(void (*callback)()) {

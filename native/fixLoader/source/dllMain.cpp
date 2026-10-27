@@ -1,6 +1,7 @@
 #include "entryPointHook.h"
 #include "fatalError.h"
 #include "hookRegistry.h"
+#include "lateStart.h"
 #include "linePipe.h"
 #include "modulePath.h"
 #include "pumpHooks.h"
@@ -28,6 +29,8 @@ static HMODULE loaderModule = nullptr;
 // Names this game session in every tool's log file; tools reloaded later keep using it.
 static char sessionStamp[32];
 static LinePipeServer commandPipe;
+// Loaded by LoadLibrary after the entry point ran, as a packed executable does while it unpacks.
+static bool isLateStart = false;
 
 static void requireDirectory(const std::string& path, const char* description) {
   const DWORD attributes = GetFileAttributesA(path.c_str());
@@ -51,7 +54,8 @@ static void logExecutable() {
     headers->FileHeader.TimeDateStamp, headers->OptionalHeader.SizeOfImage, static_cast<const void*>(executableBase));
 }
 
-// Runs on the main thread at the game's entry point, outside the loader lock.
+// Runs on the main thread outside the loader lock: at the game's entry point, or after a late load at the unpacked
+// game's first startup call.
 static void runLoader() {
   const std::string clientFolder = resolveModuleDirectory(loaderModule);
   const std::string toolsDirectory = clientFolder + "\\" + toolsFolderName;
@@ -62,7 +66,12 @@ static void runLoader() {
     now.wMinute, now.wSecond);
   openSessionLog(toolsDirectory, toolName, sessionStamp);
   logExecutable();
-  initializeHookRegistry();
+  if (isLateStart) {
+    writeLogLine("INFO", "startMode mode=late trigger=%s", lateStartTrigger());
+  } else {
+    writeLogLine("INFO", "startMode mode=entryPoint");
+    initializeHookRegistry();
+  }
   installPumpHooks(GetCurrentThreadId());
   const ToolHost host = { toolsDirectory.c_str(), sessionStamp, GetCurrentThreadId(), &setPumpCallback };
   loadListedTools(host);
@@ -101,12 +110,15 @@ extern "C" BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved
     if (!isGameExecutable()) {
       return TRUE;
     }
-    // A null reserved pointer means LoadLibrary at runtime: the entry point has
-    // already run, so the tools could never be loaded.
+    // A null reserved pointer means LoadLibrary at runtime: the entry point has already run, so the tools start at the
+    // unpacked game's first startup call instead.
     if (reserved == nullptr) {
-      fatalError("fixLoader must be loaded at startup as the game's version.dll, not by LoadLibrary");
+      isLateStart = true;
+      initializeHookRegistry();
+      installLateStart(&runLoader);
+    } else {
+      installEntryPointHook(&runLoader);
     }
-    installEntryPointHook(&runLoader);
   }
   return TRUE;
 }

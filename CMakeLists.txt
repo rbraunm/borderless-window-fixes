@@ -95,8 +95,18 @@ function(addToolLibrary toolName outputName toolFolder)
   target_compile_definitions(${toolName} PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _HAS_EXCEPTIONS=0 _CRT_SECURE_NO_WARNINGS
     "windowFixesBuildCommit=\"${windowFixesBuildCommit}\"")
   target_compile_options(${toolName} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /WX /EHs-c- /GR- /Gy /utf-8 /O2 /Brepro>)
+  # A game's own copy of a tool's settings file (games/<game>/<file>.cfg) replaces the tool's shipped defaults.
   file(GLOB settingsFiles CONFIGURE_DEPENDS "${toolFolder}/*.cfg")
-  embedDefaultFiles(${toolName} ${settingsFiles} ${tool_SETTINGS})
+  set(embeddedSettingsFiles "")
+  foreach(settingsFile IN LISTS settingsFiles)
+    get_filename_component(settingsFileName "${settingsFile}" NAME)
+    if(EXISTS "${gameDirectory}/${settingsFileName}")
+      list(APPEND embeddedSettingsFiles "${gameDirectory}/${settingsFileName}")
+    else()
+      list(APPEND embeddedSettingsFiles "${settingsFile}")
+    endif()
+  endforeach()
+  embedDefaultFiles(${toolName} ${embeddedSettingsFiles} ${tool_SETTINGS})
 endfunction()
 
 # The loader carries the game's tool list, so each game gets its own build of it.

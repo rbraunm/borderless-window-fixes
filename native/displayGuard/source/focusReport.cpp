@@ -4,7 +4,9 @@
 #include "hookRegistry.h"
 #include "sessionLog.h"
 
+#include <d3d9.h>
 #include <intrin.h>
+#include <winternl.h>
 
 #include <atomic>
 #include <cstdio>
@@ -12,6 +14,20 @@
 
 namespace {
 
+struct DllNotificationData {
+  ULONG flags;
+  const UNICODE_STRING* fullDllName;
+  const UNICODE_STRING* baseDllName;
+  PVOID dllBase;
+  ULONG sizeOfImage;
+};
+
+typedef VOID (CALLBACK* DllNotificationFunction)(ULONG reason, const DllNotificationData* data, PVOID context);
+typedef NTSTATUS (NTAPI* LdrRegisterDllNotificationFunction)(ULONG, DllNotificationFunction, PVOID, PVOID*);
+typedef IDirect3D9* (WINAPI* Direct3DCreate9Function)(UINT);
+typedef HRESULT (STDMETHODCALLTYPE* CreateDeviceFunction)(IDirect3D9*, UINT, D3DDEVTYPE, HWND, DWORD, D3DPRESENT_PARAMETERS*,
+  IDirect3DDevice9**);
+typedef HRESULT (STDMETHODCALLTYPE* PresentFunction)(IDirect3DDevice9*, const RECT*, const RECT*, HWND, const RGNDATA*);
 typedef BOOL (WINAPI* ClipCursorFunction)(const RECT*);
 typedef HWND (WINAPI* SetCaptureFunction)(HWND);
 typedef BOOL (WINAPI* ReleaseCaptureFunction)();
@@ -70,6 +86,16 @@ SetWindowsHookExAFunction originalSetWindowsHookExA = nullptr;
 ShowWindowFunction originalShowWindow = nullptr;
 SetForegroundWindowFunction originalSetForegroundWindow = nullptr;
 SwapBuffersFunction originalSwapBuffers = nullptr;
+Direct3DCreate9Function originalDirect3DCreate9 = nullptr;
+CreateDeviceFunction originalCreateDevice = nullptr;
+PresentFunction originalPresent = nullptr;
+volatile LONG isD3d9Hooked = 0;
+volatile LONG isD3d9InterfaceHooked = 0;
+volatile LONG isD3d9DeviceHooked = 0;
+// Positions in the COM interfaces' method tables, from d3d9.h's declaration order.
+const size_t createDeviceIndex = 16;
+const size_t presentIndex = 17;
+const ULONG dllLoadedReason = 1;
 NtUserChangeDisplaySettingsFunction originalNtUserChangeDisplaySettings = nullptr;
 SdlGetHintFunction sdlGetHint = nullptr;
 SdlSetHintWithPriorityFunction originalSdlSetHintWithPriority = nullptr;
@@ -465,6 +491,75 @@ BOOL WINAPI swapBuffersDetour(HDC deviceContext) {
   return result;
 }
 
+void* methodOf(void* object, size_t index) {
+  return (*reinterpret_cast<void***>(object))[index];
+}
+
+HRESULT STDMETHODCALLTYPE presentDetour(IDirect3DDevice9* device, const RECT* source, const RECT* destination, HWND window,
+    const RGNDATA* dirtyRegion) {
+  const HRESULT result = originalPresent(device, source, destination, window, dirtyRegion);
+  countFrame(counterNow(), SUCCEEDED(result) ? TRUE : FALSE);
+  return result;
+}
+
+// Every device shares one method table, so the first device's Present covers all of them.
+HRESULT STDMETHODCALLTYPE createDeviceDetour(IDirect3D9* direct3d, UINT adapter, D3DDEVTYPE deviceType, HWND focusWindow,
+    DWORD behaviorFlags, D3DPRESENT_PARAMETERS* parameters, IDirect3DDevice9** device) {
+  const HRESULT result = originalCreateDevice(direct3d, adapter, deviceType, focusWindow, behaviorFlags, parameters, device);
+  writeLogLine("INFO", "d3d9DeviceCreated result=0x%08lX windowed=%d width=%u height=%u refreshRate=%u interval=0x%X",
+    static_cast<unsigned long>(result), parameters->Windowed, parameters->BackBufferWidth, parameters->BackBufferHeight,
+    parameters->FullScreen_RefreshRateInHz, parameters->PresentationInterval);
+  if (SUCCEEDED(result) && InterlockedExchange(&isD3d9DeviceHooked, 1) == 0) {
+    installHook("IDirect3DDevice9::Present", methodOf(*device, presentIndex), reinterpret_cast<void*>(&presentDetour),
+      reinterpret_cast<void**>(&originalPresent));
+  }
+  return result;
+}
+
+IDirect3D9* WINAPI direct3DCreate9Detour(UINT sdkVersion) {
+  IDirect3D9* direct3d = originalDirect3DCreate9(sdkVersion);
+  if (direct3d != nullptr && InterlockedExchange(&isD3d9InterfaceHooked, 1) == 0) {
+    installHook("IDirect3D9::CreateDevice", methodOf(direct3d, createDeviceIndex), reinterpret_cast<void*>(&createDeviceDetour),
+      reinterpret_cast<void**>(&originalCreateDevice));
+  }
+  return direct3d;
+}
+
+void hookD3d9() {
+  if (InterlockedExchange(&isD3d9Hooked, 1) == 0) {
+    installExportHook("d3d9.dll", "Direct3DCreate9", reinterpret_cast<void*>(&direct3DCreate9Detour),
+      reinterpret_cast<void**>(&originalDirect3DCreate9));
+  }
+}
+
+VOID CALLBACK onDllNotification(ULONG reason, const DllNotificationData* data, PVOID context) {
+  (void)context;
+  const wchar_t* const d3d9Name = L"d3d9.dll";
+  if (reason == dllLoadedReason && data->baseDllName != nullptr &&
+      data->baseDllName->Length == wcslen(d3d9Name) * sizeof(wchar_t) &&
+      _wcsnicmp(data->baseDllName->Buffer, d3d9Name, wcslen(d3d9Name)) == 0) {
+    hookD3d9();
+  }
+}
+
+// Direct3D 9 frames are timed at the device's Present, from the moment d3d9.dll is loaded.
+void installD3d9Reporting() {
+  HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+  LdrRegisterDllNotificationFunction ldrRegisterDllNotification = ntdll == nullptr ? nullptr :
+    reinterpret_cast<LdrRegisterDllNotificationFunction>(GetProcAddress(ntdll, "LdrRegisterDllNotification"));
+  if (ldrRegisterDllNotification == nullptr) {
+    fatalError("ntdll.dll does not export LdrRegisterDllNotification");
+  }
+  PVOID cookie = nullptr;
+  const NTSTATUS status = ldrRegisterDllNotification(0, &onDllNotification, nullptr, &cookie);
+  if (status < 0) {
+    fatalError("LdrRegisterDllNotification failed (status 0x%08lX)", static_cast<unsigned long>(status));
+  }
+  if (GetModuleHandleA("d3d9.dll") != nullptr) {
+    hookD3d9();
+  }
+}
+
 int sdlSetHintWithPriorityDetour(const char* name, const char* value, int priority) {
   const int result = originalSdlSetHintWithPriority(name, value, priority);
   writeLogLine("INFO", "sdlSetHint name=%s value=%s priority=%d result=%d", name != nullptr ? name : "(null)",
@@ -570,5 +665,6 @@ void installFocusReporting(DWORD mainThreadID) {
 #endif
   hookExport("win32u.dll", "NtUserChangeDisplaySettings", &ntUserChangeDisplaySettingsDetour, &originalNtUserChangeDisplaySettings);
   installSdlReporting();
+  installD3d9Reporting();
   logCursorState("load");
 }

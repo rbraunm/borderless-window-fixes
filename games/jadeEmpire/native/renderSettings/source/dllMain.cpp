@@ -16,28 +16,31 @@ static const char* const renderSettingsVersion = "0.1.0";
 static const char* const gameProgramName = "JadeEmpire.exe";
 static const char* const settingsFileName = "JadeEmpire.ini";
 static const char* const renderSection = "Render";
+static const char* const gameSection = "Game";
 
 static bool isLoaded = false;
 
-static void writeSetting(const std::string& path, const char* key, unsigned long value) {
+static void writeSetting(const std::string& path, const char* section, const char* key, unsigned long value) {
   char previous[64];
-  GetPrivateProfileStringA(renderSection, key, "", previous, sizeof(previous), path.c_str());
+  GetPrivateProfileStringA(section, key, "", previous, sizeof(previous), path.c_str());
   char text[32];
   snprintf(text, sizeof(text), "%lu", value);
   if (strcmp(previous, text) == 0) {
     return;
   }
-  if (!WritePrivateProfileStringA(renderSection, key, text, path.c_str())) {
-    fatalError("Could not write %s [%s] %s (error %lu)", path.c_str(), renderSection, key, GetLastError());
+  if (!WritePrivateProfileStringA(section, key, text, path.c_str())) {
+    fatalError("Could not write %s [%s] %s (error %lu)", path.c_str(), section, key, GetLastError());
   }
-  writeLogLine("INFO", "settingWritten key=%s from=%s to=%s", key, previous[0] != '\0' ? previous : "(none)", text);
+  writeLogLine("INFO", "settingWritten section=%s key=%s from=%s to=%s", section, key, previous[0] != '\0' ? previous : "(none)",
+    text);
 }
 
 extern "C" {
 
-// The game reads JadeEmpire.ini's [Render] section before it creates its window. With d3d9Borderless its only display
-// mode is the desktop's, so this sets the primary monitor's desktop mode there (the game draws on adapter 0), widescreen
-// unless the monitor is 4:3, before the game reads it. In the configuration program it does nothing.
+// The game reads JadeEmpire.ini before it creates its window. With d3d9Borderless its only display mode is the
+// desktop's, so this sets the primary monitor's desktop mode in [Render] (the game draws on adapter 0), widescreen
+// unless the monitor is 4:3, and turns the game's own 30 frames per second cap ([Game] ClampFPS) off, since
+// d3d9Borderless's frameRateLimit holds the frame rate instead. In the configuration program it does nothing.
 __declspec(dllexport) DWORD Load(const ToolHost* host) {
   if (isLoaded) {
     fatalError("Load was called twice");
@@ -69,11 +72,12 @@ __declspec(dllexport) DWORD Load(const ToolHost* host) {
   }
   writeLogLine("INFO", "desktopMode width=%lu height=%lu hertz=%lu", desktop.dmPelsWidth, desktop.dmPelsHeight,
     desktop.dmDisplayFrequency);
-  writeSetting(path, "ScrW", desktop.dmPelsWidth);
-  writeSetting(path, "ScrH", desktop.dmPelsHeight);
-  writeSetting(path, "RefreshRate", desktop.dmDisplayFrequency);
-  writeSetting(path, "Widescreen", desktop.dmPelsWidth * 3 == desktop.dmPelsHeight * 4 ? 0 : 1);
-  writeSetting(path, "Windowed", 0);
+  writeSetting(path, renderSection, "ScrW", desktop.dmPelsWidth);
+  writeSetting(path, renderSection, "ScrH", desktop.dmPelsHeight);
+  writeSetting(path, renderSection, "RefreshRate", desktop.dmDisplayFrequency);
+  writeSetting(path, renderSection, "Widescreen", desktop.dmPelsWidth * 3 == desktop.dmPelsHeight * 4 ? 0 : 1);
+  writeSetting(path, renderSection, "Windowed", 0);
+  writeSetting(path, gameSection, "ClampFPS", 0);
   writeLogLine("INFO", "loadComplete");
   return 0;
 }

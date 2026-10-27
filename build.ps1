@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
-  Builds borderless-window-fixes for one game: 64-bit DLLs from Visual Studio's MSVC, CMake and Ninja.
+  Builds borderless-window-fixes for one game: DLLs for its architecture (game.cfg) from Visual Studio's MSVC, CMake
+  and Ninja.
 .DESCRIPTION
   -game names a folder under games. Everything lands in build\<game>\bin: version.dll (fixLoader, carrying the
   game's tool list) and the tool DLLs, which carry their settings files. -test runs the Python client's tests in the
@@ -24,7 +25,8 @@ $ErrorActionPreference = "Stop"
 $buildDirectory = Join-Path (Join-Path $PSScriptRoot "build") $game
 $binaryDirectory = Join-Path $buildDirectory "bin"
 $requiredExports = @{ "version.dll" = "GetFileVersionInfoA" }
-foreach ($tool in @(Get-ShippedTools $game) + $diagnosticTools) {
+$architecture = Get-GameArchitecture $game
+foreach ($tool in @(Get-ShippedTools $game) + @(Get-DiagnosticTools $game)) {
   $requiredExports[$tool] = "Load"
 }
 
@@ -42,8 +44,10 @@ function Import-VisualStudioEnvironment {
   if (-not $installation) {
     throw "No Visual Studio installation has the C++ x86/x64 build tools"
   }
-  $vcvars = Join-Path $installation "VC\Auxiliary\Build\vcvars64.bat"
-  # vcvars64.bat runs vswhere.exe itself and expects to find it on PATH.
+  $vcvarsName = @{ "x64" = "vcvars64.bat"; "x86" = "vcvars32.bat" }[$architecture]
+  $assembler = @{ "x64" = "ml64.exe"; "x86" = "ml.exe" }[$architecture]
+  $vcvars = Join-Path $installation "VC\Auxiliary\Build\$vcvarsName"
+  # vcvars runs vswhere.exe itself and expects to find it on PATH.
   $env:PATH = (Split-Path $vswhere) + ";" + $env:PATH
   $environmentLines = & cmd.exe /c "`"$vcvars`" >nul && set"
   if ($LASTEXITCODE -ne 0) {
@@ -55,12 +59,12 @@ function Import-VisualStudioEnvironment {
       Set-Item -Path ("env:" + $line.Substring(0, $separator)) -Value $line.Substring($separator + 1)
     }
   }
-  foreach ($tool in @("cl.exe", "ml64.exe", "cmake.exe", "ninja.exe", "dumpbin.exe")) {
+  foreach ($tool in @("cl.exe", $assembler, "cmake.exe", "ninja.exe", "dumpbin.exe")) {
     if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
-      throw "$tool is not on the Visual Studio x64 environment's PATH"
+      throw "$tool is not on the Visual Studio $architecture environment's PATH"
     }
   }
-  Write-BuildLog "Visual Studio x64 environment from $installation"
+  Write-BuildLog "Visual Studio $architecture environment from $installation"
 }
 
 function Get-BuildCommit {
@@ -104,7 +108,7 @@ if (-not $buildCommit) {
 }
 Write-BuildLog "Building commit $buildCommit for $game"
 Invoke-NativeStep "CMake configure" {
-  & cmake.exe -S $PSScriptRoot -B $buildDirectory -G Ninja -DCMAKE_BUILD_TYPE=Release "-DwindowFixesBuildCommit=$buildCommit" "-Dgame=$game"
+  & cmake.exe -S $PSScriptRoot -B $buildDirectory -G Ninja -DCMAKE_BUILD_TYPE=Release "-DwindowFixesBuildCommit=$buildCommit" "-Dgame=$game" "-DgameArchitecture=$architecture" "-DgameExecutable=$(Split-Path -Leaf (Get-GameExecutable $game))"
 }
 Invoke-NativeStep "CMake build" { & cmake.exe --build $buildDirectory }
 foreach ($fileName in $requiredExports.Keys) {

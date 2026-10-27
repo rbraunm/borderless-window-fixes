@@ -10,6 +10,7 @@ class TestGames(unittest.TestCase):
     self.assertEqual(game.executablePath, Path("S:/Games/Steam/steamapps/common/SOMA/Soma.exe"))
     self.assertEqual(game.executableName, "Soma.exe")
     self.assertEqual(game.toolsFolder, Path("S:/Games/Steam/steamapps/common/SOMA/windowFixes"))
+    self.assertEqual(game.architecture, "x64")
 
   def testAnUnknownGameNamesTheKnownOnes(self):
     with self.assertRaisesRegex(ValueError, r"no game named 'nosuchgame'; the games are .*\bsoma\b"):

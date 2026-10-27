@@ -195,13 +195,22 @@ HMODULE WINAPI loadLibraryExWDetour(LPCWSTR fileName, HANDLE file, DWORD flags) 
 
 }
 
+// 32-bit user32 has no SetWindowLongPtr exports: the header maps them to SetWindowLong.
+#if defined(_M_IX86)
+#define setWindowLongWName "SetWindowLongW"
+#define setWindowLongAName "SetWindowLongA"
+#else
+#define setWindowLongWName "SetWindowLongPtrW"
+#define setWindowLongAName "SetWindowLongPtrA"
+#endif
+
 void installWindowReporting(DWORD mainThreadID) {
   gameMainThreadID = mainThreadID;
   installExportHook("user32.dll", "CreateWindowExW", reinterpret_cast<void*>(&createWindowExWDetour), reinterpret_cast<void**>(&originalCreateWindowExW));
   installExportHook("user32.dll", "CreateWindowExA", reinterpret_cast<void*>(&createWindowExADetour), reinterpret_cast<void**>(&originalCreateWindowExA));
   installExportHook("user32.dll", "SetWindowPos", reinterpret_cast<void*>(&setWindowPosDetour), reinterpret_cast<void**>(&originalSetWindowPos));
-  installExportHook("user32.dll", "SetWindowLongPtrW", reinterpret_cast<void*>(&setWindowLongPtrWDetour), reinterpret_cast<void**>(&originalSetWindowLongPtrW));
-  installExportHook("user32.dll", "SetWindowLongPtrA", reinterpret_cast<void*>(&setWindowLongPtrADetour), reinterpret_cast<void**>(&originalSetWindowLongPtrA));
+  installExportHook("user32.dll", setWindowLongWName, reinterpret_cast<void*>(&setWindowLongPtrWDetour), reinterpret_cast<void**>(&originalSetWindowLongPtrW));
+  installExportHook("user32.dll", setWindowLongAName, reinterpret_cast<void*>(&setWindowLongPtrADetour), reinterpret_cast<void**>(&originalSetWindowLongPtrA));
   installExportHook("user32.dll", "ChangeDisplaySettingsExW", reinterpret_cast<void*>(&changeDisplaySettingsExWDetour),
     reinterpret_cast<void**>(&originalChangeDisplaySettingsExW));
   installExportHook("user32.dll", "ChangeDisplaySettingsExA", reinterpret_cast<void*>(&changeDisplaySettingsExADetour),

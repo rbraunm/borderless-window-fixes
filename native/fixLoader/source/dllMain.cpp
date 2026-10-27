@@ -43,7 +43,7 @@ static void logExecutable() {
     fatalError("Could not resolve the game executable path (error %lu)", GetLastError());
   }
   const BYTE* executableBase = reinterpret_cast<const BYTE*>(GetModuleHandleA(nullptr));
-  const IMAGE_NT_HEADERS64* headers = reinterpret_cast<const IMAGE_NT_HEADERS64*>(
+  const IMAGE_NT_HEADERS* headers = reinterpret_cast<const IMAGE_NT_HEADERS*>(
     executableBase + reinterpret_cast<const IMAGE_DOS_HEADER*>(executableBase)->e_lfanew);
   // Not the command line: a launcher may put a login ticket on it.
   writeLogLine("INFO", "sessionStart version=%s buildCommit=%s mainThreadID=%lu executable=%s timeDateStamp=0x%08lX "
@@ -70,12 +70,27 @@ static void runLoader() {
   writeLogLine("INFO", "loadComplete");
 }
 
+// Every program in the game's folder that imports version.dll loads this copy, such as a configuration program
+// beside the game: only the game's executable gets the tools.
+static bool isGameExecutable() {
+  char executablePath[MAX_PATH];
+  const DWORD executablePathLength = GetModuleFileNameA(nullptr, executablePath, sizeof(executablePath));
+  if (executablePathLength == 0 || executablePathLength >= sizeof(executablePath)) {
+    fatalError("Could not resolve the executable path (error %lu)", GetLastError());
+  }
+  const char* executableName = strrchr(executablePath, '\\');
+  return _stricmp(executableName != nullptr ? executableName + 1 : executablePath, windowFixesGameExecutable) == 0;
+}
+
 extern "C" BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
   if (reason == DLL_PROCESS_ATTACH) {
     setFatalErrorTitle(toolName);
     loaderModule = instance;
     DisableThreadLibraryCalls(instance);
     loadSystemVersionLibrary();
+    if (!isGameExecutable()) {
+      return TRUE;
+    }
     // A null reserved pointer means LoadLibrary at runtime: the entry point has
     // already run, so the tools could never be loaded.
     if (reserved == nullptr) {

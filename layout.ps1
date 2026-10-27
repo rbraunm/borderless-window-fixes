@@ -8,11 +8,11 @@ games\<game>\game.cfg names the game's executable relative to its install folder
 the windowFixes folder beside it gets every tool the game's windowFixes.txt names, all of which a newer build
 replaces. No settings files: each tool carries its own and writes or updates them in the windowFixes folder when the
 game starts, so a player's settings are never replaced. The diagnostic tools never ship; Copy-ToolLayout -diagnostics
-adds them to an install, and the loader keeps a listed tool whose DLL the folder holds.
+adds them to an install, and the loader keeps a listed tool whose DLL the folder holds. game.cfg's architecture (x64
+or x86) picks the build; stabilityGuard is x64 only.
 #>
 
 $repositoryFolder = $PSScriptRoot
-$diagnosticTools = @("stabilityGuard.dll", "displayGuard.dll")
 
 function Get-GameFolder {
   param([string]$game)
@@ -23,19 +23,41 @@ function Get-GameFolder {
   return $folder
 }
 
-function Get-GameExecutable {
-  param([string]$game)
+function Get-GameSetting {
+  param([string]$game, [string]$key)
   $configPath = Join-Path (Get-GameFolder $game) "game.cfg"
-  $executables = @()
+  $values = @()
   foreach ($line in Get-Content -LiteralPath $configPath) {
-    if ($line -match '^\s*executable\s*=\s*(.+?)\s*$') {
-      $executables += $Matches[1]
+    if ($line -match ('^\s*' + $key + '\s*=\s*(.+?)\s*$')) {
+      $values += $Matches[1]
     }
   }
-  if ($executables.Count -ne 1) {
-    throw "$configPath must set executable exactly once"
+  if ($values.Count -ne 1) {
+    throw "$configPath must set $key exactly once"
   }
-  return $executables[0]
+  return $values[0]
+}
+
+function Get-GameExecutable {
+  param([string]$game)
+  return Get-GameSetting $game "executable"
+}
+
+function Get-GameArchitecture {
+  param([string]$game)
+  $architecture = Get-GameSetting $game "architecture"
+  if (@("x64", "x86") -notcontains $architecture) {
+    throw "games\$game\game.cfg: architecture must be x64 or x86, not $architecture"
+  }
+  return $architecture
+}
+
+function Get-DiagnosticTools {
+  param([string]$game)
+  if ((Get-GameArchitecture $game) -eq "x64") {
+    return @("stabilityGuard.dll", "displayGuard.dll")
+  }
+  return @("displayGuard.dll")
 }
 
 function Get-ShippedTools {
@@ -98,6 +120,7 @@ function Add-DiagnosticTools {
   param([string]$game, [string]$clientFolder)
   $binaryFolder = Join-Path (Join-Path (Join-Path $repositoryFolder "build") $game) "bin"
   $toolsFolder = Join-Path $clientFolder "windowFixes"
+  $diagnosticTools = @(Get-DiagnosticTools $game)
   foreach ($tool in $diagnosticTools) {
     Copy-LayoutFile (Join-Path $binaryFolder $tool) $toolsFolder
   }

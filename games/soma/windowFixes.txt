@@ -3,3 +3,4 @@
 # shipped state; a line naming a tool the release does not ship is removed and noted in the loader's log.
 stabilityGuard.dll
 displayGuard.dll
+nvidiaProfile.dll

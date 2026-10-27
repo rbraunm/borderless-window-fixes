@@ -1,0 +1,4 @@
+upstream: https://github.com/NVIDIA/nvapi
+commit: 70d337db9186e968eab622f7e786de7e437faf3d
+commitDate: 2026-09-18
+vendored: nvapi.h, nvapi_lite_*.h, NvApiDriverSettings.h (include/), amd64/nvapi64.lib (lib/), License.txt (unmodified)

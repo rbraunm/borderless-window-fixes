@@ -1,4 +1,10 @@
 # borderless-window-fixes
+**Retired.** These fixes continue in [ankh-plugins](https://github.com/AmmolitePreservation/ankh-plugins), with their releases at [ankh-plugins releases](https://github.com/AmmolitePreservation/ankh-plugins/releases): one for Jade Empire, one for SOMA, and a kit for any other game. This repository takes no more changes and its releases are not updated.
+
+To move an installed fix to the new release, first delete what this repository's release added beside the game's executable (`version.dll`, `msimg32.dll` for Jade Empire, and the `windowFixes` folder), then extract the new release there.
+
+What follows describes the repository as it was when it was retired.
+
 Fixes for Windows games, 64-bit and 32-bit, that misbehave in borderless windowed mode on large and high-DPI monitors or on today's Windows: windows that flash, stop rendering after losing focus, keep hold of the mouse and keyboard, or animation and physics tied to the frame rate. Each fix is a standalone DLL loaded into the game by a `version.dll` proxy, with its settings and logs in a `windowFixes` folder beside the game's executable. The game's own files are never modified. No installer, no registry.
 
 Started from the AmmolitePreservation client toolsets (clearcoat, scarab, ddo-client-tools); this repository depends on none of them.
